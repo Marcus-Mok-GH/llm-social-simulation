@@ -55,6 +55,32 @@ export function canStand(
 }
 
 /**
+ * Nearest position an agent of `radius` can actually stand in.
+ *
+ * Anything that teleports an actor (meeting seating, vent travel) can land it
+ * in a wall pocket that incremental movement can never escape, because each
+ * small step is individually blocked. Snapping out of that pocket is the
+ * cheap insurance policy.
+ */
+export function nearestStandable(
+  map: GameMap,
+  x: number,
+  y: number,
+  radius: number,
+): Vec2 {
+  if (canStand(map, x, y, radius)) return { x, y };
+  for (let r = 8; r <= 420; r += 8) {
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      const nx = x + Math.cos(a) * r;
+      const ny = y + Math.sin(a) * r;
+      if (canStand(map, nx, ny, radius)) return { x: nx, y: ny };
+    }
+  }
+  return { x, y };
+}
+
+/**
  * Axis-separated movement: try the X step, then the Y step. Each axis is only
  * committed if the result is walkable, which produces wall-sliding along
  * corridors instead of hard stops.

@@ -139,9 +139,10 @@ export const UMBRA_DECK_MAP: GameMap = {
     { id: "vent_hold", roomId: "hold", kind: "vent", x: 1250, y: 990, label: "Vent" },
     { id: "vent_life", roomId: "life_support", kind: "vent", x: 1600, y: 1010, label: "Vent" },
 
-    // Sabotage targets
+    // Sabotage targets — each is also a repair console during an outage.
     { id: "sab_reactor", roomId: "core_reactor", kind: "sabotage", x: 300, y: 1000, label: "Reactor meltdown" },
     { id: "sab_life", roomId: "life_support", kind: "sabotage", x: 1470, y: 1010, label: "Life support fault" },
+    { id: "sab_power", roomId: "power_bay", kind: "sabotage", x: 660, y: 900, label: "Grid overload" },
 
     // Spawn / meeting point
     { id: "spawn_mess", roomId: "mess_hall", kind: "spawn", x: 840, y: 340, label: "Spawn" },
@@ -150,6 +151,49 @@ export const UMBRA_DECK_MAP: GameMap = {
 
 export function roomById(map: GameMap, id: RoomId): Room | undefined {
   return map.rooms.find((r) => r.id === id);
+}
+
+/**
+ * Room containing a world point, falling back to the nearest room for points
+ * that sit in a corridor. Used for perception notes and dialogue ("I saw them
+ * in Comms"), so "nearest" is the useful answer, not `null`.
+ */
+export function roomAt(map: GameMap, x: number, y: number): Room {
+  for (const r of map.rooms) {
+    if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r;
+  }
+  let best = map.rooms[0];
+  let bestD = Infinity;
+  for (const r of map.rooms) {
+    const cx = Math.max(r.x, Math.min(x, r.x + r.w));
+    const cy = Math.max(r.y, Math.min(y, r.y + r.h));
+    const d = Math.hypot(cx - x, cy - y);
+    if (d < bestD) {
+      bestD = d;
+      best = r;
+    }
+  }
+  return best;
+}
+
+/** Nearest point of interest of a given kind, or null. */
+export function nearestPoi(
+  map: GameMap,
+  kind: PoiKind,
+  x: number,
+  y: number,
+): PointOfInterest | null {
+  let best: PointOfInterest | null = null;
+  let bestD = Infinity;
+  for (const p of map.pointsOfInterest) {
+    if (p.kind !== kind) continue;
+    const d = Math.hypot(p.x - x, p.y - y);
+    if (d < bestD) {
+      bestD = d;
+      best = p;
+    }
+  }
+  return best;
 }
 
 /** Adjacency list (room id -> connected room ids) derived from corridors. */

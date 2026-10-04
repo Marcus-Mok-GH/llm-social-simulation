@@ -1,5 +1,35 @@
 # Roadmap: Social-Deduction Game (Among Us-style, original IP)
 
+## 0. Status
+
+Implemented and playable. Everything from Phases 0-6 below has landed in
+`src/`, and the headless checks in `scripts/` prove it:
+
+| Phase | Status | Where |
+|---|---|---|
+| 0 — Scaffold & tooling | done | Vite + React + TS + Tailwind, vitest replaced by `scripts/validate-*.ts` under bun |
+| 1 — Map & rendering | done | `src/game/map.ts`, `src/game/render/renderMap.ts` |
+| 2 — Core player mechanics | done | `src/game/player.ts`, `collision.ts`, `vision.ts` (fog), `tasks.ts` + `components/TaskModal.tsx` |
+| 3 — Game loop & state machine | done | `src/game/engine.ts` (phases, win conditions, bodies, ejections) |
+| 4 — AI agents | done | `src/ai/` (model + heuristic), `src/game/perception.ts`, `crewmate.ts`, `imposter.ts` |
+| 5 — Social systems & meetings | done | `src/game/engine.ts` meeting loop, `src/game/dialogue.ts`, `components/MeetingOverlay.tsx` |
+| 6 — UI/UX & theme | done | `src/App.tsx`, `src/components/*` |
+| 7 — Persistence & evaluation | partial | match history + transcripts + belief snapshots in `src/game/persistence.ts` (localStorage); Convex tables and replay UI still to do |
+| 8 — Polish & deploy | partial | production build verified; audio/accessibility passes outstanding |
+
+The decisions below that differ from this original plan:
+
+- **Persistence is `localStorage`, not Convex.** The Convex schema stub remains at
+  `src/convex/schema.ts`, but nothing depends on a deployed backend, so the game
+  works offline and matches are still recorded with full transcripts.
+- **Model calls are client-side**, straight to the OpenAI-compatible Berget AI
+  endpoint (CORS-enabled). No `"use node"` action is involved; the key is inlined
+  into the bundle, which is fine for a demo and documented in the README.
+- **Votes are computed from the belief model, never from the model**, so agent
+  claims can be audited against agent beliefs.
+- **Vitest was dropped** in favour of bun-run headless scripts that replay whole
+  matches; they assert on outcomes rather than on units.
+
 ## 1. Current State Review
 
 The repository is **empty except for a README and a single commit** — there is no
