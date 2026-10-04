@@ -4,6 +4,10 @@ import path from "node:path";
 
 // Freebuff requires HMR disabled and the dev server bound to 0.0.0.0.
 export default defineConfig({
+  // The game reads its model credentials straight from the environment so the
+  // key never has to be written to a file. `BERGET_API_KEY` is the deployment
+  // variable; `VITE_LLM_*` lets you override endpoint/model per developer.
+  envPrefix: ["VITE_", "BERGET_"],
   plugins: [react()],
   resolve: {
     alias: {

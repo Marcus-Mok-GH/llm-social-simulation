@@ -1,8 +1,8 @@
 /**
  * Headless smoke test for the canvas renderer. Runs drawMap against a recording
  * mock 2D context (no DOM needed) to prove the drawing code executes
- * end-to-end and actually issues draw calls for rooms / corridors / POIs, and
- * for the player when one is supplied.
+ * end-to-end and actually issues draw calls for rooms / corridors / POIs, for
+ * the actors, and for the fog layer.
  *
  * Run: bun scripts/validate-render.ts
  */
@@ -11,6 +11,7 @@ import { createImposters } from "../src/game/imposter";
 import { UMBRA_DECK_MAP as map } from "../src/game/map";
 import { createPlayer } from "../src/game/player";
 import { drawMap } from "../src/game/render/renderMap";
+import { buildVisibilityGrid, castVision } from "../src/game/vision";
 
 function makeCtx(calls: string[]): CanvasRenderingContext2D {
   const handler: ProxyHandler<Record<string, unknown>> = {
@@ -65,53 +66,95 @@ if (count(mapCalls, "setTransform") === 0) {
   process.exit(1);
 }
 
-// --- Pass 2: map + player + crewmates --------------------------------------
+// --- Pass 2: actors, role-neutral ------------------------------------------
 const player = createPlayer(map);
 const crewmates = createCrewmates(map, 3);
 // Force one crewmate into the working state so the task progress ring draws.
 crewmates[0].state = "working";
 crewmates[0].taskProgress = 0.5;
 const imposters = createImposters(map, 2);
-// Exercise the venting branch (alpha fade) and the stalking link.
-imposters[0].state = "venting";
 imposters[1].state = "stalking";
 imposters[1].targetCrewmateId = crewmates[1].id;
-const withPlayer: string[] = [];
+
+const withActors: string[] = [];
 try {
-  drawMap(makeCtx(withPlayer), map, 960, 600, 1, { player, crewmates, imposters });
+  drawMap(makeCtx(withActors), map, 960, 600, 1, { player, crewmates, imposters });
 } catch (err) {
-  console.error("drawMap (with player + crewmates + imposters) threw:", err);
+  console.error("drawMap (with actors) threw:", err);
   process.exit(1);
 }
 
-// Player = shadow (ellipse) + 3 arcs (body, visor, ring).
-if (count(withPlayer, "ellipse") === 0) {
-  console.error("drawMap did not draw the player shadow (ellipse)");
+if (count(withActors, "ellipse") === 0) {
+  console.error("drawMap did not draw actor shadows (ellipse)");
   process.exit(1);
 }
-if (count(withPlayer, "arc") <= count(mapCalls, "arc")) {
+if (count(withActors, "arc") <= count(mapCalls, "arc")) {
   console.error("drawMap did not draw the player body (arc count unchanged)");
   process.exit(1);
 }
-// Player + crewmate + imposter shadows = ellipse per actor.
-if (count(withPlayer, "ellipse") < 1 + crewmates.length + imposters.length) {
+// Player + crew + imposters all get a shadow. A stalking imposter is still on
+// the deck (only a venting one is hidden).
+const visibleActors = 1 + crewmates.length + imposters.length;
+if (count(withActors, "ellipse") !== visibleActors) {
   console.error(
-    `expected >= ${1 + crewmates.length + imposters.length} ellipses, got ${count(withPlayer, "ellipse")}`,
+    `expected ${visibleActors} actor shadows, got ${count(withActors, "ellipse")}`,
   );
   process.exit(1);
 }
-// Imposters use save/restore for the venting alpha and the stalk link dash.
-if (count(withPlayer, "save") < imposters.length || count(withPlayer, "restore") < imposters.length) {
-  console.error("expected save/restore calls for the imposter draws");
+// Imposters must not be marked out of the box: no reveal → no stalk link.
+// The only dashes on a normal frame are the spawn marker and its reset.
+if (count(withActors, "setLineDash") !== count(mapCalls, "setLineDash")) {
+  console.error("imposters leaked a stalking link without analyst view");
   process.exit(1);
 }
-if (count(withPlayer, "setLineDash") === 0) {
-  console.error("expected a dashed stalking link (setLineDash)");
+
+// --- Pass 3: analyst view reveals the tells ---------------------------------
+const revealed: string[] = [];
+try {
+  drawMap(makeCtx(revealed), map, 960, 600, 1, { player, crewmates, imposters, revealRoles: true });
+} catch (err) {
+  console.error("drawMap (analyst view) threw:", err);
+  process.exit(1);
+}
+if (count(revealed, "setLineDash") <= count(mapCalls, "setLineDash")) {
+  console.error("analyst view did not draw the stalking link");
+  process.exit(1);
+}
+
+// --- Pass 4: a venting imposter is inside the ducts, not on the deck --------
+const hidden = createImposters(map, 1);
+hidden[0].state = "venting";
+const withHidden: string[] = [];
+drawMap(makeCtx(withHidden), map, 960, 600, 1, { player, crewmates: [], imposters: hidden, revealRoles: true });
+if (count(withHidden, "ellipse") !== 1) {
+  console.error(
+    `expected only the player shadow while an imposter vents, got ${count(withHidden, "ellipse")}`,
+  );
+  process.exit(1);
+}
+
+// --- Pass 5: fog of war -----------------------------------------------------
+const grid = buildVisibilityGrid(map);
+const polygon = castVision(grid, player.x, player.y, 400);
+const fogged: string[] = [];
+try {
+  drawMap(makeCtx(fogged), map, 960, 600, 1, { player, fog: { polygon, grid } });
+} catch (err) {
+  console.error("drawMap (fog) threw:", err);
+  process.exit(1);
+}
+if (count(fogged, "fill") <= count(mapCalls, "fill")) {
+  console.error("fog layer did not fill the unlit region");
+  process.exit(1);
+}
+if (polygon.length !== 360 * 2) {
+  console.error(`expected 360 vision rays, got ${polygon.length / 2}`);
   process.exit(1);
 }
 
 console.log("Renderer smoke test passed ✓");
 console.log(`  map pass:    ${mapCalls.length} calls, fill=${count(mapCalls, "fill")}, arcs=${count(mapCalls, "arc")}`);
 console.log(
-  `  actors pass: ${withPlayer.length} calls, arcs=${count(withPlayer, "arc")}, ellipse=${count(withPlayer, "ellipse")}`,
+  `  actors pass: ${withActors.length} calls, arcs=${count(withActors, "arc")}, ellipse=${count(withActors, "ellipse")}`,
 );
+console.log(`  fog pass:    ${fogged.length} calls, polygon=${polygon.length / 2} rays`);

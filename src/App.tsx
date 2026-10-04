@@ -1,31 +1,40 @@
+import { useState } from "react";
 import { motion } from "framer-motion";
-import { Activity, Cpu, Map as MapIcon, Radar, Rocket, ShieldAlert, Users } from "lucide-react";
-import { MapCanvas } from "@/components/MapCanvas";
-import { UMBRA_DECK_MAP } from "@/game/map";
+import {
+  Activity,
+  BrainCircuit,
+  Cpu,
+  History,
+  Map as MapIcon,
+  Radar,
+  ShieldAlert,
+} from "lucide-react";
+import { readLlmConfig } from "@/ai/llm";
 import { MAP_LEGEND, POI_LEGEND_COLORS } from "@/game/render/renderMap";
+import { UMBRA_DECK_MAP } from "@/game/map";
+import { describeMatch, loadMatches, type MatchRecord } from "@/game/persistence";
+import { GameStage } from "@/components/GameStage";
 import { cn } from "@/lib/utils";
 
-const convexConfigured = Boolean(import.meta.env.VITE_CONVEX_URL);
+const llmConfigured = Boolean(readLlmConfig());
 
 const systems = [
-  { label: "Vite", detail: "Build tool", ok: true },
-  { label: "React + TS", detail: "UI runtime", ok: true },
-  { label: "Tailwind", detail: "Styling", ok: true },
-  {
-    label: "Convex",
-    detail: convexConfigured ? "Connected" : "Awaiting deployment",
-    ok: convexConfigured,
-  },
+  { label: "Vite + React + TS", detail: "App shell", ok: true },
+  { label: "Canvas 2D", detail: "Renderer + fog of war", ok: true },
+  { label: "A* pathfinding", detail: "Agent navigation", ok: true },
+  { label: "Berget AI", detail: llmConfigured ? "Model connected" : "No API key", ok: llmConfigured },
 ];
 
 const roadmap = [
-  { phase: "Phase 0", title: "Scaffold & tooling", status: "done" },
-  { phase: "Phase 1", title: "Station map & renderer", status: "done" },
-  { phase: "Phase 2", title: "Player movement & collision", status: "done" },
-  { phase: "Phase 3", title: "AI crewmates & pathfinding", status: "done" },
-  { phase: "Phase 4", title: "Imposter AI & vent travel", status: "active" },
-  { phase: "Phase 5", title: "Vision fog, kills & sabotage", status: "queued" },
-];
+  { phase: "0", title: "Scaffold & tooling", status: "done" },
+  { phase: "1", title: "Station map & renderer", status: "done" },
+  { phase: "2", title: "Movement, collision & vision fog", status: "done" },
+  { phase: "3", title: "Tasks, minigames, kills & sabotage", status: "done" },
+  { phase: "4", title: "Meetings, dialogue, voting & ejections", status: "done" },
+  { phase: "5", title: "Belief model + LLM decision loop", status: "done" },
+  { phase: "6", title: "Match history & agent memory snapshots", status: "done" },
+  { phase: "7", title: "Convex backend, auth & replays", status: "queued" },
+] as const;
 
 function LegendSwatch({ kind }: { kind: keyof typeof POI_LEGEND_COLORS }) {
   const color = POI_LEGEND_COLORS[kind];
@@ -40,7 +49,60 @@ function LegendSwatch({ kind }: { kind: keyof typeof POI_LEGEND_COLORS }) {
   );
 }
 
+function HistoryPanel({ matches }: { matches: MatchRecord[] }) {
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 16 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true }}
+      transition={{ duration: 0.5 }}
+      className="rounded-xl border border-void-700 bg-void-900/50 p-5"
+    >
+      <div className="mb-4 flex items-center gap-2 text-xs tracking-widest text-slate-400">
+        <History className="h-4 w-4 text-signal" />
+        MATCH HISTORY
+      </div>
+      {matches.length === 0 ? (
+        <p className="text-xs leading-relaxed text-slate-500">
+          No matches recorded yet. Finish a shift and the transcript, ejections and
+          every agent's suspicion snapshot are saved here.
+        </p>
+      ) : (
+        <ul className="space-y-3">
+          {matches.slice(0, 6).map((m) => (
+            <li key={m.id} className="border-b border-void-800 pb-3 last:border-0 last:pb-0">
+              <div className="flex items-center justify-between gap-3">
+                <span
+                  className={cn(
+                    "text-xs font-semibold",
+                    m.winner === "crew" ? "text-signal" : "text-[#ff5a6e]",
+                  )}
+                >
+                  {describeMatch(m)}
+                </span>
+                <span className="text-[10px] tracking-widest text-slate-600">
+                  {m.playerRole === "crew" ? "AS CREW" : "AS IMPOSTER"}
+                </span>
+              </div>
+              <p className="mt-1 text-[11px] text-slate-500">
+                {m.roster.map((r) => `${r.name}${r.role === "imposter" ? "*" : ""}`).join(" · ")}
+                {m.llm.calls > 0 && (
+                  <span className="ml-2 text-slate-600">
+                    · {m.llm.calls} model calls / {m.llm.fallbacks} fallbacks
+                  </span>
+                )}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </motion.section>
+  );
+}
+
 export default function App() {
+  const [matches, setMatches] = useState<MatchRecord[]>(() => loadMatches());
+
   return (
     <div className="relative min-h-screen overflow-hidden">
       <div className="starfield pointer-events-none absolute inset-0 opacity-70" />
@@ -57,17 +119,17 @@ export default function App() {
                 UMBRA STATION
               </p>
               <p className="text-[11px] tracking-widest text-slate-500">
-                SOCIAL DEDUCTION SIM
+                LLM SOCIAL SIMULATION
               </p>
             </div>
           </div>
           <span className="hidden items-center gap-2 rounded-full border border-void-700 bg-void-900/60 px-3 py-1 text-[11px] tracking-widest text-slate-400 sm:flex">
-            <span className="h-1.5 w-1.5 rounded-full bg-hazard animate-pulseGlow" />
-            PHASE 4 — IMPOSTER AI
+            <span className="h-1.5 w-1.5 rounded-full bg-signal animate-pulseGlow" />
+            {llmConfigured ? "BERGET AI ONLINE" : "HEURISTIC AGENTS"}
           </span>
         </header>
 
-        <main className="py-12">
+        <main className="py-10">
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -75,8 +137,8 @@ export default function App() {
             className="max-w-3xl"
           >
             <span className="inline-flex items-center gap-2 rounded-full border border-signal/30 bg-signal/5 px-3 py-1 text-[11px] tracking-widest text-signal">
-              <Rocket className="h-3.5 w-3.5" />
-              PHASE 3 COMPLETE — PHASE 4 IN PROGRESS
+              <BrainCircuit className="h-3.5 w-3.5" />
+              PLAYABLE — AGENTS REASON, REMEMBER AND LIE
             </span>
 
             <h1 className="mt-6 font-display text-4xl font-black leading-tight tracking-tight text-white sm:text-6xl">
@@ -85,33 +147,20 @@ export default function App() {
             </h1>
 
             <p className="mt-5 max-w-xl text-sm leading-relaxed text-slate-400">
-              A social-deduction game where you play as one crew member among
-              AI-driven agents. Crewmates run tasks; hidden imposters lie, kill,
-              and sabotage. Every decision is made by an LLM agent with its own
-              perception and memory — not a scripted state machine.
+              A social-deduction game where you are one crew member among
+              AI-driven agents. Every agent perceives only what it can actually
+              see through the fog, remembers it, forms suspicion, and argues its
+              case in meetings — with Berget AI doing the reasoning when a key is
+              present and a belief-driven fallback when it isn't.
             </p>
-
-            <div className="mt-8 flex flex-wrap gap-3">
-              <button
-                type="button"
-                className="inline-flex items-center gap-2 rounded-lg bg-signal px-5 py-2.5 text-sm font-semibold text-void-950 transition hover:bg-signal/90"
-              >
-                <Users className="h-4 w-4" />
-                Enter the lobby
-              </button>
-              <span className="inline-flex items-center gap-2 rounded-lg border border-void-700 bg-void-900/60 px-5 py-2.5 text-sm text-slate-400">
-                <Cpu className="h-4 w-4 text-hazard" />
-                AI crewmates are live on the deck
-              </span>
-            </div>
           </motion.div>
 
-          {/* Deck map */}
+          {/* The game */}
           <motion.section
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.1 }}
-            className="mt-16"
+            className="mt-10"
           >
             <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
               <div className="flex items-center gap-2">
@@ -127,7 +176,7 @@ export default function App() {
               </div>
             </div>
 
-            <MapCanvas />
+            <GameStage history={matches} onHistoryChange={setMatches} />
 
             <ul className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-[11px] text-slate-400">
               {MAP_LEGEND.map((entry) => (
@@ -139,11 +188,12 @@ export default function App() {
             </ul>
           </motion.section>
 
-          <div className="mt-16 grid gap-6 md:grid-cols-2">
+          <div className="mt-12 grid gap-6 md:grid-cols-2">
             <motion.section
               initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, delay: 0.2 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5 }}
               className="rounded-xl border border-void-700 bg-void-900/50 p-5"
             >
               <div className="mb-4 flex items-center gap-2 text-xs tracking-widest text-slate-400">
@@ -172,8 +222,9 @@ export default function App() {
 
             <motion.section
               initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, delay: 0.3 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5 }}
               className="rounded-xl border border-void-700 bg-void-900/50 p-5"
             >
               <div className="mb-4 flex items-center gap-2 text-xs tracking-widest text-slate-400">
@@ -182,10 +233,10 @@ export default function App() {
               </div>
               <ul className="space-y-3">
                 {roadmap.map((r) => (
-                  <li key={r.phase} className="flex items-center justify-between">
+                  <li key={r.phase} className="flex items-center justify-between gap-3">
                     <div className="flex items-baseline gap-3">
                       <span className="font-display text-[10px] tracking-widest text-slate-500">
-                        {r.phase}
+                        PHASE {r.phase}
                       </span>
                       <span className="text-sm text-slate-200">{r.title}</span>
                     </div>
@@ -193,7 +244,6 @@ export default function App() {
                       className={cn(
                         "text-[10px] tracking-wider",
                         r.status === "done" && "text-signal",
-                        r.status === "active" && "text-hazard",
                         r.status === "queued" && "text-slate-600",
                       )}
                     >
@@ -203,11 +253,52 @@ export default function App() {
                 ))}
               </ul>
             </motion.section>
+
+            <HistoryPanel matches={matches} />
+
+            <motion.section
+              initial={{ opacity: 0, y: 16 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5 }}
+              className="rounded-xl border border-void-700 bg-void-900/50 p-5"
+            >
+              <div className="mb-4 flex items-center gap-2 text-xs tracking-widest text-slate-400">
+                <Cpu className="h-4 w-4 text-hazard" />
+                HOW THE AGENTS THINK
+              </div>
+              <ol className="space-y-2.5 text-xs leading-relaxed text-slate-400">
+                <li>
+                  <span className="text-signal">1 · Perception</span> — line of
+                  sight over the walkable geometry; no agent cheats through walls.
+                </li>
+                <li>
+                  <span className="text-signal">2 · Memory</span> — sightings,
+                  bodies and vents land in a capped per-agent memory with a
+                  suspicion vector that decays over time.
+                </li>
+                <li>
+                  <span className="text-signal">3 · Decision</span> — a periodic
+                  model call returns one validated JSON intent; anything invalid
+                  falls back to the scripted heuristic.
+                </li>
+                <li>
+                  <span className="text-signal">4 · Debate</span> — meeting lines
+                  come from the same memory the model reads, so agents accuse
+                  from evidence rather than from a dialogue table.
+                </li>
+                <li>
+                  <span className="text-signal">5 · Vote</span> — always computed
+                  from suspicion scores, never from the model, so you can audit
+                  it in the analyst panel.
+                </li>
+              </ol>
+            </motion.section>
           </div>
         </main>
 
         <footer className="border-t border-void-800 pt-4 text-[11px] tracking-widest text-slate-600">
-          UMBRA STATION · ORIGINAL IP · VITE + REACT + CONVEX
+          UMBRA STATION · ORIGINAL IP · VITE + REACT + BERGET AI
         </footer>
       </div>
     </div>
