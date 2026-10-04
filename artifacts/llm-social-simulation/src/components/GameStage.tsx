@@ -225,7 +225,6 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
       {snap.phase === "briefing" && (
         <Briefing
           role={snap.role}
-          playerName={snap.playerName}
           roster={roster}
           onStart={() => {
             engine.begin();

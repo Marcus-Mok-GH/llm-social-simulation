@@ -216,7 +216,6 @@ export function crewmateGotoPoi(
 /** Walk to an arbitrary point (room centre, a body, the meeting table). */
 export function crewmateGotoPoint(
   agent: Crewmate,
-  map: GameMap,
   grid: NavGrid,
   x: number,
   y: number,

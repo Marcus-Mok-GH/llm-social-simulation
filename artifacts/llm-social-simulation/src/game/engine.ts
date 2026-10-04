@@ -32,7 +32,6 @@ import {
   crewmateGotoPoint,
   crewmateGotoPoi,
   crewmateHalt,
-  CREWMATE_NAMES,
   updateCrewmate,
   type Crewmate,
 } from "./crewmate";
@@ -543,9 +542,6 @@ export class GameEngine {
 
     for (const obs of this.actors) {
       if (!obs.alive) continue;
-      const ox = obs.entity.x;
-      const oy = obs.entity.y;
-
       for (const tgt of this.actors) {
         if (tgt === obs || !tgt.alive) continue;
         if (!this.visible(obs, tgt.entity.x, tgt.entity.y)) continue;
@@ -971,7 +967,7 @@ export class GameEngine {
         case "goto_room":
         case "group_up": {
           const room = this.map.rooms.find((r) => r.id === intent.roomId);
-          if (room) crewmateGotoPoint(c, this.map, this.grid, room.x + room.w / 2, room.y + room.h / 2);
+          if (room) crewmateGotoPoint(c, this.grid, room.x + room.w / 2, room.y + room.h / 2);
           break;
         }
         default:
@@ -1126,7 +1122,7 @@ export class GameEngine {
         return;
       }
       if (this.time >= a.repathAt) {
-        crewmateGotoPoint(a.entity as Crewmate, this.map, this.grid, body.x, body.y, true);
+        crewmateGotoPoint(a.entity as Crewmate, this.grid, body.x, body.y, true);
         a.repathAt = this.time + 1.6;
       }
     }

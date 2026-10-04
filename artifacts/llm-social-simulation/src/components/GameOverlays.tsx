@@ -13,13 +13,12 @@ export interface RosterRow {
 
 interface BriefingProps {
   role: "crew" | "imposter";
-  playerName: string;
   roster: RosterRow[];
   onStart: () => void;
 }
 
 /** Pre-match role reveal: who you are, who else is on the deck. */
-export function Briefing({ role, playerName, roster, onStart }: BriefingProps) {
+export function Briefing({ role, roster, onStart }: BriefingProps) {
   const imposter = role === "imposter";
   return (
     <div className="absolute inset-0 z-30 flex items-center justify-center bg-void-950/92 px-4">
