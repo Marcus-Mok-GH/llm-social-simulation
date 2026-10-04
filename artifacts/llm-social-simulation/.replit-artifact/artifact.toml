@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "LLM Social Simulation"
+description = "A browser-based social simulation built with React and Vite. This app packages the repository's Umbra Station experience as a Replit preview and static production build."
+version = "1.0.0"
+id = "artifacts/llm-social-simulation"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 20102
+
+[services.development]
+run = "pnpm --filter @workspace/llm-social-simulation run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/llm-social-simulation", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/llm-social-simulation/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20102"
+BASE_PATH = "/"

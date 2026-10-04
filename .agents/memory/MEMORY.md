@@ -1,0 +1,1 @@
+- [Package firewall recovery](package-firewall.md) — when a transitive archive is blocked, check for a newer version and update the root pnpm override rather than bypassing the firewall.

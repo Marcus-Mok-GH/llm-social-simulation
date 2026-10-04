@@ -1,9 +1,12 @@
-# [Project name]
+# LLM Social Simulation
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Umbra Station is a browser-based social-deduction simulation with a live deck map, a controllable player, and autonomous crew and imposter agents.
 
 ## Run & Operate
 
+- `pnpm --filter @workspace/llm-social-simulation run dev` — run the Umbra Station web app
+- `pnpm --filter @workspace/llm-social-simulation run build` — create its static production bundle
+- `pnpm --filter @workspace/llm-social-simulation run typecheck` — typecheck the web app
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
@@ -22,23 +25,27 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `llm-social-simulation/` — unchanged GitHub clone, with its own `origin` remote
+- `artifacts/llm-social-simulation/` — Replit web artifact built from the cloned source; static production settings are in `.replit-artifact/artifact.toml`
+- `artifacts/api-server/` — shared API service
+- `lib/api-spec/openapi.yaml` — API contract source of truth
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- The Replit web artifact is a static Vite deployment and does not require a server process in production.
+- Convex is optional at runtime; the local simulation renders without a Convex deployment URL.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Players can explore the station deck and move their character while crewmates and imposters navigate the map.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+No additional preferences recorded.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- The frontend build expects `PORT` and `BASE_PATH`, supplied by the artifact workflow and publishing configuration.
 
 ## Pointers
 

@@ -160,3 +160,5 @@ overrides:
   esbuild: "0.28.2"
   # orval pins js-yaml to an exact version older than the CVE fix (>=4.3.2)
   js-yaml: '4.3.2'
+  # Use the current tar release; older transitive versions are blocked by the package firewall.
+  tar: '7.5.22'
