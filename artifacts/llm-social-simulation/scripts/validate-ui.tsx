@@ -17,8 +17,8 @@ const checks: [string, boolean][] = [
   ["renders role reveal", html.includes("BEGIN SHIFT")],
   ["renders briefed role", html.includes("You are")],
   ["renders the HUD task bar", html.includes("STATION TASKS")],
-  ["renders match history panel", html.includes("MATCH HISTORY")],
-  ["renders agent explainer", html.includes("HOW THE AGENTS THINK")],
+  ["renders the per-agent model line", html.includes("different model")],
+  ["renders the map legend", html.includes("Task console")],
   ["has a canvas", html.includes("<canvas")],
 ];
 let bad = 0;

@@ -23,23 +23,11 @@
   body {
     @apply bg-void-950 text-slate-100 antialiased;
     font-family: "JetBrains Mono", ui-monospace, monospace;
-    background-image:
-      radial-gradient(1200px 600px at 15% -10%, rgba(56, 225, 200, 0.08), transparent 60%),
-      radial-gradient(900px 500px at 90% 0%, rgba(255, 176, 32, 0.06), transparent 55%);
-    background-attachment: fixed;
     /* Touch ergonomics: no double-tap zoom on controls, no pull-to-refresh
        mid-match, no rubber-banding off the page edges. */
     touch-action: manipulation;
     overscroll-behavior: none;
     -webkit-tap-highlight-color: transparent;
-  }
-
-  /* Phones/tablets: fixed backgrounds repaint on every scroll frame, so let
-     them scroll naturally below the desktop breakpoint. */
-  @media (max-width: 767px) {
-    body {
-      background-attachment: scroll;
-    }
   }
 
   /* Keep interactive edges clear of notches and home indicators. */
@@ -55,20 +43,5 @@
   h3,
   .font-display {
     font-family: "Orbitron", ui-sans-serif, system-ui, sans-serif;
-  }
-}
-
-@layer utilities {
-  .starfield::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background-image:
-      radial-gradient(1px 1px at 20% 30%, rgba(255, 255, 255, 0.7), transparent),
-      radial-gradient(1px 1px at 70% 60%, rgba(255, 255, 255, 0.5), transparent),
-      radial-gradient(1.5px 1.5px at 45% 80%, rgba(56, 225, 200, 0.6), transparent),
-      radial-gradient(1px 1px at 85% 25%, rgba(255, 255, 255, 0.45), transparent);
-    background-size: 100% 100%;
-    pointer-events: none;
   }
 }

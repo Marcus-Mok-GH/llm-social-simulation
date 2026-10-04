@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { BrainCircuit, Eye, Skull } from "lucide-react";
+import { BrainCircuit, Eye } from "lucide-react";
 import type { Snapshot } from "@/game/engine";
 import { cn } from "@/lib/utils";
 
@@ -70,7 +70,8 @@ export function GameHud({
 
   const llmStatus = snap.llm.configured ? (
     <>
-      MODEL {snap.llm.calls} CALLS · {snap.llm.fallbacks} FALLBACKS
+      {(snap.llm.provider ?? "").toUpperCase()} · {snap.llm.roster.length} MODELS ·{" "}
+      {snap.llm.calls} CALLS
     </>
   ) : (
     <>HEURISTIC AGENTS — NO MODEL KEY</>
@@ -89,17 +90,8 @@ export function GameHud({
                 : "border-signal/50 bg-signal/10 text-signal",
             )}
           >
-            {isImposter ? "IMPOSTER" : "CREW"} · {snap.playerName}
-          </span>
-
-          {!snap.playerAlive && (
-            <span className="flex items-center gap-1.5 rounded-full border border-void-700 bg-void-900/80 px-3 py-1 text-[10px] tracking-widest text-slate-400">
-              <Skull className="h-3 w-3" /> DEAD
-            </span>
-          )}
-
-          <span className="rounded-full border border-void-700 bg-void-900/70 px-3 py-1 text-[10px] tracking-widest text-slate-400">
-            ALIVE {aliveCount}
+            {isImposter ? "IMPOSTER" : "CREW"} · {snap.playerName} ·{" "}
+            {snap.playerAlive ? `${aliveCount} ALIVE` : "DEAD"}
           </span>
         </div>
 
@@ -115,7 +107,7 @@ export function GameHud({
           <Chip
             active={llmOn}
             onClick={onToggleLlm}
-            title="Use Berget AI for agent reasoning and meeting dialogue"
+            title="Use the configured model provider for agent reasoning and meeting dialogue"
           >
             <BrainCircuit className="h-3 w-3" />
             {llmOn ? "LLM ON" : "LLM OFF"}
@@ -219,7 +211,11 @@ export function GameHud({
           </p>
           <ul className="space-y-1.5">
             {snap.analyst.map((a) => (
-              <li key={a.key} className="flex items-center justify-between gap-2 text-[10px]">
+              <li
+                key={a.key}
+                title={snap.llm.roster.find((r) => r.key === a.key)?.model ?? undefined}
+                className="flex items-center justify-between gap-2 text-[10px]"
+              >
                 <span className="flex items-center gap-1.5 text-slate-300">
                   <span
                     className="h-2 w-2 rounded-full"

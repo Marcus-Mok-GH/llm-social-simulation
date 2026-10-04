@@ -7,10 +7,10 @@
  *   2. What should I say in the meeting? -> `statementWithModel` / `fallbackStatement`
  *   3. Who do I vote for?                -> always the belief model (see engine.ts)
  *
- * The model path asks Berget AI for JSON and validates it. On *any* failure —
- * no key, timeout, rate limit, malformed JSON, unsupported action — it returns
- * `null` and the caller uses the scripted heuristic, which is why the game
- * keeps running in an offline demo.
+ * The model path asks the agent's configured provider (Pollinations or Berget)
+ * for JSON and validates it. On *any* failure — no key, timeout, rate limit,
+ * malformed JSON, unsupported action — it returns `null` and the caller uses
+ * the scripted heuristic, which is why the game keeps running in an offline demo.
  */
 
 import { complete, extractJson, type ChatMessage, type LlmConfig } from "./llm";
@@ -259,7 +259,9 @@ export async function intentWithModel(ctx: AiContext, view: WorldView): Promise<
     const text = await complete(ctx.cfg, messages, {
       json: true,
       temperature: 0.5,
-      maxTokens: 160,
+      // Reasoning models spend part of the budget thinking before the intent,
+      // so leave headroom; the replies themselves are tiny.
+      maxTokens: 220,
     });
     if (!text) return null;
     return validateIntent(extractJson<unknown>(text), view);
@@ -341,7 +343,9 @@ export async function statementWithModel(
         { role: "system", content: statementSystem(mind) },
         { role: "user", content: JSON.stringify(payload) },
       ],
-      { json: true, temperature: 0.85, maxTokens: 150 },
+      // Generous enough that a reasoning model still emits the full JSON
+      // object after its hidden reasoning tokens.
+      { json: true, temperature: 0.85, maxTokens: 320 },
     );
     if (!text) return null;
 

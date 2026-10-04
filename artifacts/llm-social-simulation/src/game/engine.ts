@@ -22,7 +22,14 @@ import {
   type Intent,
   type WorldView,
 } from "../ai/decision";
-import { readLlmConfig, RequestGate, type LlmConfig } from "../ai/llm";
+import {
+  activeProvider,
+  configFor,
+  RequestGate,
+  type LlmConfig,
+  type LlmProvider,
+  type ProviderConfig,
+} from "../ai/llm";
 import {
   canStand,
   nearestStandable,
@@ -156,6 +163,8 @@ export interface Actor {
   alive: boolean;
   entity: Player | Crewmate | Imposter;
   mind: Mind;
+  /** Model endpoint for this agent only. `null` on the human and with no key. */
+  cfg: LlmConfig | null;
   tasks: TaskAssignment[];
   /** Completions already examined by the task-bar accounting. */
   processed: number;
@@ -230,7 +239,16 @@ export interface Snapshot {
   alive: { crew: number; imposter: number };
   meeting: MeetingView | null;
   log: string[];
-  llm: { enabled: boolean; configured: boolean; calls: number; fallbacks: number; budget: number };
+  llm: {
+    enabled: boolean;
+    configured: boolean;
+    provider: LlmProvider | null;
+    calls: number;
+    fallbacks: number;
+    budget: number;
+    /** The model each AI agent is running on — deliberately all different. */
+    roster: { key: string; name: string; model: string | null }[];
+  };
   explored: number;
   meetings: number;
   ejects: number;
@@ -298,7 +316,8 @@ export class GameEngine {
   llmCalls = 0;
   llmFallbacks = 0;
 
-  private readonly cfg: LlmConfig | null;
+  private readonly provider: ProviderConfig | null;
+  /** Shared throttle + spend guard. Each actor supplies its own `cfg`. */
   private readonly ai: AiContext;
   private perceptionAcc = 0;
 
@@ -309,8 +328,8 @@ export class GameEngine {
     this.los = makeLosTest(this.map);
     this.rng = makeRng(opts.seed ?? 20260410);
     this.llmEnabled = opts.llm ?? true;
-    this.cfg = readLlmConfig();
-    this.ai = { cfg: this.cfg, gate: new RequestGate(300, 3), budget: { remaining: LLM_BUDGET } };
+    this.provider = activeProvider();
+    this.ai = { cfg: null, gate: new RequestGate(300, 3), budget: { remaining: LLM_BUDGET } };
 
     this.buildRoster(opts.playerIsImposter ?? false);
   }
@@ -354,6 +373,7 @@ export class GameEngine {
         alive: true,
         entity: this.player,
         mind: playerMind,
+        cfg: null,
         tasks: [],
         processed: 0,
         counted: 0,
@@ -366,8 +386,10 @@ export class GameEngine {
         speakAt: 0,
         voteAt: 0,
       },
-      ...this.crewmates.map((e, i) => this.makeActor(`crew:${i}`, e, "crew")),
-      ...this.imposters.map((e, i) => this.makeActor(`imp:${i}`, e, "imposter")),
+      ...this.crewmates.map((e, i) => this.makeActor(`crew:${i}`, e, "crew", i)),
+      ...this.imposters.map((e, i) =>
+        this.makeActor(`imp:${i}`, e, "imposter", this.crewmates.length + i),
+      ),
     ];
 
     // Imposters know each other; that secrecy is what makes them dangerous.
@@ -430,6 +452,7 @@ export class GameEngine {
     key: string,
     entity: Crewmate | Imposter,
     role: "crew" | "imposter",
+    index: number,
   ): Actor {
     return {
       key,
@@ -441,6 +464,7 @@ export class GameEngine {
       alive: true,
       entity,
       mind: createMind(key, role),
+      cfg: this.modelFor(index),
       tasks: [],
       processed: 0,
       counted: 0,
@@ -453,6 +477,22 @@ export class GameEngine {
       speakAt: 0,
       voteAt: 0,
     };
+  }
+
+  /**
+   * Bind agent `index` to its own model from the active provider's cheap pool.
+   * The pool is walked in order and wrapped only if it runs short, so in the
+   * normal 4-crew + 2-imposter match every AI player is a different model.
+   */
+  private modelFor(index: number): LlmConfig | null {
+    if (!this.provider || this.provider.models.length === 0) return null;
+    const model = this.provider.models[index % this.provider.models.length];
+    return configFor(this.provider, model);
+  }
+
+  /** Per-agent decision context: its own endpoint, the shared gate and budget. */
+  private contextFor(a: Actor): AiContext {
+    return { cfg: a.cfg, gate: this.ai.gate, budget: this.ai.budget };
   }
 
   // -- lookup helpers ------------------------------------------------------
@@ -942,10 +982,10 @@ export class GameEngine {
     const nextIn = a.role === "imposter" ? this.rng.range(7, 11) : this.rng.range(10, 16);
     a.nextDecisionAt = this.time + nextIn;
 
-    if (this.llmEnabled && this.cfg) {
+    if (this.llmEnabled && a.cfg) {
       const seq = ++a.decisionSeq;
       a.pendingDecision = true;
-      void intentWithModel(this.ai, view)
+      void intentWithModel(this.contextFor(a), view)
         .then((intent) => {
           a.pendingDecision = false;
           if (intent) {
@@ -1217,8 +1257,8 @@ export class GameEngine {
       if (stmt.accuse) this.applyAccusation(a, stmt.accuse, m);
     };
 
-    if (this.llmEnabled && this.cfg) {
-      void statementWithModel(this.ai, this.map, a.mind, { key: a.key, name: a.name }, this.names, {
+    if (this.llmEnabled && a.cfg) {
+      void statementWithModel(this.contextFor(a), this.map, a.mind, { key: a.key, name: a.name }, this.names, {
         ...input,
         bodiesFound: this.bodies.length,
         ejectedSoFar: [],
@@ -1702,10 +1742,14 @@ export class GameEngine {
       log: [...this.log],
       llm: {
         enabled: this.llmEnabled,
-        configured: Boolean(this.cfg),
+        configured: Boolean(this.provider),
+        provider: this.provider?.provider ?? null,
         calls: this.llmCalls,
         fallbacks: this.llmFallbacks,
         budget: this.ai.budget.remaining,
+        roster: this.actors
+          .filter((a) => !a.isPlayer)
+          .map((a) => ({ key: a.key, name: a.name, model: a.cfg?.model ?? null })),
       },
       explored: this.vis.explored.reduce((n, v) => n + v, 0) / this.vis.explored.length,
       meetings: this.meetingsHeld,

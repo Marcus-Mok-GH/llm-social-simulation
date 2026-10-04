@@ -9,6 +9,8 @@ export interface RosterRow {
   name: string;
   color: string;
   isPlayer: boolean;
+  /** The agent's own model, shown as a tooltip in the briefing. */
+  model: string | null;
 }
 
 interface BriefingProps {
@@ -47,6 +49,7 @@ export function Briefing({ role, roster, compact = false, onStart }: BriefingPro
           {roster.map((r) => (
             <li
               key={r.key}
+              title={r.model ?? undefined}
               className={cn(
                 "flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] tracking-wider",
                 r.isPlayer

@@ -80,6 +80,7 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
         color: a.color,
         isPlayer: a.isPlayer,
         role: a.role,
+        model: a.cfg?.model ?? null,
       })),
     [engine],
   );

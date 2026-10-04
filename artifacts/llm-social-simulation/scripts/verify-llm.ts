@@ -7,22 +7,36 @@
  * the engine validates them, so a pass here means agent reasoning works against
  * the configured endpoint rather than only the heuristic fallback.
  *
- * Run: BERGET_API_KEY=sk_ber_... bun scripts/verify-llm.ts
+ * Run: POLLINATIONS_API_KEY=pk_... bun scripts/verify-llm.ts
+ *   or: BERGET_API_KEY=sk_ber_... bun scripts/verify-llm.ts
  */
 
 import { intentWithModel, statementWithModel, type AiContext, type WorldView } from "../src/ai/decision";
-import { readLlmConfig, RequestGate } from "../src/ai/llm";
+import {
+  complete,
+  configFor,
+  extractJson,
+  readLlmConfig,
+  readProviders,
+  RequestGate,
+} from "../src/ai/llm";
 import { UMBRA_DECK_MAP } from "../src/game/map";
 import { createMind, bump, remember } from "../src/game/perception";
 
 const cfg = readLlmConfig();
 if (!cfg) {
-  console.error("No API key found (BERGET_API_KEY or VITE_LLM_API_KEY) — cannot verify the model path.");
+  console.error(
+    "No API key found (POLLINATIONS_API_KEY, BERGET_API_KEY or the VITE_LLM_* overrides) — cannot verify the model path.",
+  );
   process.exit(2);
 }
 
+const provider = readProviders()[0];
+
+console.log(`Provider : ${cfg.provider}`);
 console.log(`Endpoint : ${cfg.baseUrl}`);
 console.log(`Model    : ${cfg.model}`);
+console.log(`Pool     : ${provider.models.length} models (one per agent)`);
 console.log(`Key      : ${cfg.apiKey.slice(0, 7)}… (${cfg.apiKey.length} chars)`);
 
 const ai: AiContext = { cfg, gate: new RequestGate(0, 2), budget: { remaining: 20 } };
@@ -69,6 +83,19 @@ function check(cond: boolean, msg: string): void {
   } else {
     console.log(`  ✓ ${msg}`);
   }
+}
+
+// --- 0. Every model in the pool answers in JSON mode -------------------------
+// Each AI agent is bound to a different model, so a pool entry that cannot
+// answer would silently strand that agent on the heuristic fallback.
+for (const model of provider.models) {
+  const text = await complete(
+    configFor(provider, model),
+    [{ role: "user", content: 'Reply with only the JSON {"ok":true}' }],
+    { json: true, maxTokens: 160 },
+  );
+  const parsed = text ? extractJson<{ ok?: unknown }>(text) : null;
+  check(Boolean(parsed && parsed.ok !== undefined), `${model} answered in JSON mode`);
 }
 
 // --- 1. Movement intent -----------------------------------------------------
