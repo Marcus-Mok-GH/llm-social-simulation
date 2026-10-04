@@ -35,15 +35,21 @@ const POI_COLORS: Record<PointOfInterest["kind"], string> = {
   spawn: "#94a3b8",
 };
 
-/** Fit the world into a canvas of the given CSS size (contain). */
+/**
+ * Fit the world into a canvas of the given CSS size (contain). `biasY` picks
+ * where the leftover vertical space goes: 0.5 centres the map (desktop),
+ * while a smaller value lifts it up so the HUD can sit above and the touch
+ * controls below without covering the deck.
+ */
 export function computeTransform(
   map: GameMap,
   canvasW: number,
   canvasH: number,
+  biasY = 0.5,
 ): ViewTransform {
   const scale = Math.min(canvasW / map.width, canvasH / map.height);
   const offsetX = (canvasW - map.width * scale) / 2;
-  const offsetY = (canvasH - map.height * scale) / 2;
+  const offsetY = (canvasH - map.height * scale) * Math.min(1, Math.max(0, biasY));
   return { scale, offsetX, offsetY };
 }
 
@@ -380,6 +386,8 @@ export interface Scene {
   bodies?: readonly { x: number; y: number; color: string }[];
   fog?: FogLayer | null;
   revealRoles?: boolean;
+  /** 0..1 share of the letterbox that goes above the map (default centred). */
+  biasY?: number;
 }
 
 /**
@@ -400,7 +408,7 @@ export function drawMap(
   ctx.fillStyle = COLORS.space;
   ctx.fillRect(0, 0, cssW, cssH);
 
-  const t = computeTransform(map, cssW, cssH);
+  const t = computeTransform(map, cssW, cssH, scene.biasY);
   const reveal = scene.revealRoles ?? false;
 
   ctx.setTransform(

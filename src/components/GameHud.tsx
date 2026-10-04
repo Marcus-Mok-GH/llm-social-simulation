@@ -1,10 +1,12 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { BrainCircuit, Eye, Skull } from "lucide-react";
 import type { Snapshot } from "@/game/engine";
 import { cn } from "@/lib/utils";
 
 interface GameHudProps {
   snap: Snapshot;
+  /** Phone/tablet layout: tasks move to the top, touch controls own the bottom. */
+  compact?: boolean;
   analyst: boolean;
   onToggleAnalyst: () => void;
   llmOn: boolean;
@@ -53,9 +55,26 @@ function Meter({ value, tone }: { value: number; tone: "signal" | "hazard" }) {
   );
 }
 
-export function GameHud({ snap, analyst, onToggleAnalyst, llmOn, onToggleLlm }: GameHudProps) {
+export function GameHud({
+  snap,
+  compact = false,
+  analyst,
+  onToggleAnalyst,
+  llmOn,
+  onToggleLlm,
+}: GameHudProps) {
   const isImposter = snap.role === "imposter";
   const aliveCount = snap.alive.crew + snap.alive.imposter;
+  const [tasksOpen, setTasksOpen] = useState(false);
+  const tasksDone = snap.tasks.filter((t) => t.done).length;
+
+  const llmStatus = snap.llm.configured ? (
+    <>
+      MODEL {snap.llm.calls} CALLS · {snap.llm.fallbacks} FALLBACKS
+    </>
+  ) : (
+    <>HEURISTIC AGENTS — NO MODEL KEY</>
+  );
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 select-none">
@@ -137,9 +156,64 @@ export function GameHud({ snap, analyst, onToggleAnalyst, llmOn, onToggleLlm }: 
         </div>
       )}
 
+      {/* Compact layout: the task list collapses to a chip under the meter so
+          the deck keeps its space; opening it overlays the (fogged) map. */}
+      {compact && (
+        <div className="mx-auto mt-3 w-full max-w-md px-3">
+          <button
+            type="button"
+            onClick={() => setTasksOpen((v) => !v)}
+            aria-expanded={tasksOpen}
+            className="flex w-full items-center justify-between rounded-lg border border-void-700 bg-void-950/80 px-3 py-2 text-[10px] tracking-[0.2em] text-slate-400 backdrop-blur-sm"
+          >
+            <span>
+              YOUR TASKS · {tasksDone}/{snap.tasks.length}
+            </span>
+            <span className="text-signal">{tasksOpen ? "▾" : "▸"}</span>
+          </button>
+          {tasksOpen && (
+            <div className="mt-1.5 max-h-32 overflow-y-auto rounded-lg border border-void-700 bg-void-950/85 p-2.5 backdrop-blur-sm">
+              {snap.tasks.length === 0 ? (
+                <p className="text-[11px] text-slate-600">
+                  {isImposter ? "Blend in. Fake everything." : "No assignments."}
+                </p>
+              ) : (
+                <ul className="space-y-1">
+                  {snap.tasks.map((t) => (
+                    <li
+                      key={t.poiId}
+                      className={cn(
+                        "flex items-baseline gap-2 text-[11px]",
+                        t.done ? "text-slate-600 line-through" : "text-slate-300",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "h-1.5 w-1.5 shrink-0 rounded-full",
+                          t.done ? "bg-signal" : "bg-hazard",
+                        )}
+                      />
+                      <span>
+                        {t.label}
+                        <span className="text-slate-600"> · {t.room}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Analyst panel */}
       {snap.analyst && (
-        <div className="absolute right-3 top-24 w-56 rounded-lg border border-void-700 bg-void-950/85 p-3 backdrop-blur-sm">
+        <div
+          className={cn(
+            "absolute rounded-lg border border-void-700 bg-void-950/85 p-3 backdrop-blur-sm",
+            compact ? "inset-x-3 top-28" : "right-3 top-24 w-56",
+          )}
+        >
           <p className="mb-2 text-[10px] tracking-[0.2em] text-slate-500">
             BELIEF SNAPSHOT
           </p>
@@ -163,106 +237,122 @@ export function GameHud({ snap, analyst, onToggleAnalyst, llmOn, onToggleLlm }: 
         </div>
       )}
 
-      {/* Tasks + prompt */}
-      <div className="absolute inset-x-0 bottom-0 p-3">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="w-64 max-w-full rounded-lg border border-void-700 bg-void-950/80 p-3 backdrop-blur-sm">
-            <p className="mb-2 text-[10px] tracking-[0.2em] text-slate-500">YOUR TASKS</p>
-            {snap.tasks.length === 0 ? (
-              <p className="text-[11px] text-slate-600">
-                {isImposter ? "Blend in. Fake everything." : "No assignments."}
-              </p>
-            ) : (
-              <ul className="space-y-1.5">
-                {snap.tasks.map((t) => (
-                  <li
-                    key={t.poiId}
-                    className={cn(
-                      "flex items-start gap-2 text-[11px]",
-                      t.done ? "text-slate-600 line-through" : "text-slate-300",
-                    )}
-                  >
+      {/* Tasks + prompt (desktop) / prompt above touch controls (compact) */}
+      <div
+        className={cn("absolute inset-x-0 bottom-0 p-3", compact && "pb-32")}
+      >
+        {!compact && (
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div className="w-64 max-w-full rounded-lg border border-void-700 bg-void-950/80 p-3 backdrop-blur-sm">
+              <p className="mb-2 text-[10px] tracking-[0.2em] text-slate-500">YOUR TASKS</p>
+              {snap.tasks.length === 0 ? (
+                <p className="text-[11px] text-slate-600">
+                  {isImposter ? "Blend in. Fake everything." : "No assignments."}
+                </p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {snap.tasks.map((t) => (
+                    <li
+                      key={t.poiId}
+                      className={cn(
+                        "flex items-start gap-2 text-[11px]",
+                        t.done ? "text-slate-600 line-through" : "text-slate-300",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
+                          t.done ? "bg-signal" : "bg-hazard",
+                        )}
+                      />
+                      <span>
+                        {t.label}
+                        <span className="block text-[10px] text-slate-600">{t.room}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="flex-1 text-center">
+              {snap.prompt && (
+                <span className="inline-block rounded-lg border border-signal/40 bg-void-950/85 px-4 py-2 text-xs tracking-widest text-signal backdrop-blur-sm">
+                  {snap.prompt}
+                </span>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-void-700 bg-void-950/80 p-3 text-right backdrop-blur-sm">
+              {isImposter && (
+                <div className="space-y-1.5 text-[11px]">
+                  <p className="flex items-center justify-end gap-2 text-slate-400">
+                    KILL
                     <span
                       className={cn(
-                        "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
-                        t.done ? "bg-signal" : "bg-hazard",
+                        "font-mono tabular-nums",
+                        snap.killCooldown > 0 ? "text-slate-600" : "text-signal",
                       )}
-                    />
-                    <span>
-                      {t.label}
-                      <span className="block text-[10px] text-slate-600">{t.room}</span>
+                    >
+                      {snap.killCooldown > 0 ? `${snap.killCooldown.toFixed(0)}s` : "READY"}
                     </span>
-                  </li>
-                ))}
-              </ul>
-            )}
+                  </p>
+                  <p className="flex items-center justify-end gap-2 text-slate-400">
+                    SABOTAGE
+                    <span
+                      className={cn(
+                        "font-mono tabular-nums",
+                        snap.sabotageCooldown > 0 ? "text-slate-600" : "text-signal",
+                      )}
+                    >
+                      {snap.sabotageCooldown > 0
+                        ? `${snap.sabotageCooldown.toFixed(0)}s`
+                        : "READY"}
+                    </span>
+                  </p>
+                </div>
+              )}
+              <p className="mt-1 text-[10px] leading-relaxed text-slate-600">
+                WASD move · E interact
+                <br />
+                {isImposter ? "SPACE kill · Q sabotage · " : ""}R report
+              </p>
+            </div>
           </div>
+        )}
 
-          <div className="flex-1 text-center">
-            {snap.prompt && (
-              <span className="inline-block rounded-lg border border-signal/40 bg-void-950/85 px-4 py-2 text-xs tracking-widest text-signal backdrop-blur-sm">
-                {snap.prompt}
-              </span>
-            )}
+        {compact && snap.prompt && (
+          <div className="text-center">
+            <span className="inline-block max-w-full rounded-lg border border-signal/40 bg-void-950/85 px-3 py-1.5 text-[11px] tracking-wider text-signal backdrop-blur-sm">
+              {snap.prompt}
+            </span>
           </div>
-
-          <div className="rounded-lg border border-void-700 bg-void-950/80 p-3 text-right backdrop-blur-sm">
-            {isImposter && (
-              <div className="space-y-1.5 text-[11px]">
-                <p className="flex items-center justify-end gap-2 text-slate-400">
-                  KILL
-                  <span
-                    className={cn(
-                      "font-mono tabular-nums",
-                      snap.killCooldown > 0 ? "text-slate-600" : "text-signal",
-                    )}
-                  >
-                    {snap.killCooldown > 0 ? `${snap.killCooldown.toFixed(0)}s` : "READY"}
-                  </span>
-                </p>
-                <p className="flex items-center justify-end gap-2 text-slate-400">
-                  SABOTAGE
-                  <span
-                    className={cn(
-                      "font-mono tabular-nums",
-                      snap.sabotageCooldown > 0 ? "text-slate-600" : "text-signal",
-                    )}
-                  >
-                    {snap.sabotageCooldown > 0
-                      ? `${snap.sabotageCooldown.toFixed(0)}s`
-                      : "READY"}
-                  </span>
-                </p>
-              </div>
-            )}
-            <p className="mt-1 text-[10px] leading-relaxed text-slate-600">
-              WASD move · E interact
-              <br />
-              {isImposter ? "SPACE kill · Q sabotage · " : ""}R report
-            </p>
-          </div>
-        </div>
+        )}
 
         {/* Station log */}
         {snap.log.length > 0 && (
           <ul className="mt-2 space-y-0.5 text-[10px] text-slate-600">
-            {snap.log.slice(-3).map((line, i) => (
-              <li key={`${i}-${line}`}>› {line}</li>
+            {snap.log.slice(compact ? -1 : -3).map((line, i) => (
+              <li key={`${i}-${line}`} className={cn(compact && "truncate")}>
+                › {line}
+              </li>
             ))}
           </ul>
         )}
-      </div>
 
-      {/* LLM status */}
-      <div className="absolute left-3 top-[4.6rem] text-[10px] tracking-widest text-slate-600">
-        {snap.llm.configured ? (
-          <>
-            MODEL {snap.llm.calls} CALLS · {snap.llm.fallbacks} FALLBACKS
-          </>
-        ) : (
-          <>HEURISTIC AGENTS — NO MODEL KEY</>
+        {compact && (
+          <p className="mt-1.5 text-center text-[10px] tracking-widest text-slate-600">
+            {llmStatus}
+          </p>
         )}
       </div>
+
+      {/* LLM status (desktop keeps it pinned under the role chips) */}
+      {!compact && (
+        <div className="absolute left-3 top-[4.6rem] text-[10px] tracking-widest text-slate-600">
+          {llmStatus}
+        </div>
+      )}
     </div>
   );
 }

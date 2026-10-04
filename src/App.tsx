@@ -108,7 +108,7 @@ export default function App() {
       <div className="starfield pointer-events-none absolute inset-0 opacity-70" />
       <div className="pointer-events-none absolute -left-40 top-1/3 h-80 w-80 rounded-full bg-signal/10 blur-3xl animate-pulseGlow" />
 
-      <div className="relative mx-auto w-full max-w-6xl px-6 py-10">
+      <div className="relative mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-10">
         <header className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-signal/40 bg-signal/10">
@@ -129,7 +129,7 @@ export default function App() {
           </span>
         </header>
 
-        <main className="py-10">
+        <main className="py-6 sm:py-10">
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -162,7 +162,7 @@ export default function App() {
             transition={{ duration: 0.6, delay: 0.1 }}
             className="mt-10"
           >
-            <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+            <div className="mb-4 flex flex-wrap items-end justify-between gap-x-3 gap-y-2">
               <div className="flex items-center gap-2">
                 <MapIcon className="h-4 w-4 text-signal" />
                 <h2 className="font-display text-lg font-bold tracking-widest text-slate-100">

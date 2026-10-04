@@ -5,11 +5,18 @@ import { GameEngine, type Snapshot } from "@/game/engine";
 import { rankSuspects } from "@/game/perception";
 import { saveMatch, type MatchRecord } from "@/game/persistence";
 import { drawMap } from "@/game/render/renderMap";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { GameHud } from "./GameHud";
 import { Briefing, EndScreen, type RosterRow } from "./GameOverlays";
 import { MeetingOverlay } from "./MeetingOverlay";
 import { TaskModal } from "./TaskModal";
+import { TouchControls } from "./TouchControls";
 import { cn } from "@/lib/utils";
+
+/** Vertical space reserved above (HUD chips, task meter, task chip). */
+const HUD_BAND = 150;
+/** Space reserved below the deck for the log, prompt and thumb controls. */
+const CONTROL_BAND = 205;
 
 interface GameStageProps {
   className?: string;
@@ -61,6 +68,7 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
   const [engine, setEngine] = useState(() => new GameEngine());
   const [snap, setSnap] = useState<Snapshot>(() => engine.snapshot());
   const [analyst, setAnalyst] = useState(false);
+  const isMobile = useIsMobile();
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -89,11 +97,39 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
     let cssW = 1;
     let cssH = 1;
     let dpr = 1;
+    // Where the map sits vertically when the stage is taller than the deck.
+    let biasY = 0.5;
 
     const resize = () => {
       cssW = Math.max(1, Math.floor(wrap.clientWidth));
-      cssH = Math.round(cssW * (UMBRA_DECK_MAP.height / UMBRA_DECK_MAP.width));
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      // On phones keep the stage inside the viewport so the HUD and touch
+      // controls below the fold don't push the canvas off screen. Landscape
+      // phones are wider than 768px, so also honour a coarse pointer.
+      const coarse =
+        (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) ||
+        false;
+      const touchLayout = coarse || window.innerWidth < 768;
+      const byWidth = cssW * (UMBRA_DECK_MAP.height / UMBRA_DECK_MAP.width);
+      let byLayout = byWidth;
+      biasY = 0.5;
+      if (touchLayout) {
+        const vh = window.innerHeight;
+        if (cssW <= vh) {
+          // Portrait phones: the deck fits the width (contain), so reserve a
+          // band above it for the HUD and a larger band below for the thumb
+          // controls instead of letting both cover the map.
+          byLayout = Math.min(byWidth + HUD_BAND + CONTROL_BAND, vh * 0.9);
+          const leftover = Math.max(1, byLayout - byWidth);
+          biasY = Math.min(0.6, HUD_BAND / leftover);
+        } else {
+          // Landscape phones: the deck is height-fit and fills the stage; the
+          // HUD overlays it, but never let the stage exceed the viewport.
+          byLayout = Math.min(byWidth, vh * 0.85);
+        }
+      }
+      cssH = Math.max(1, Math.round(byLayout));
+      // Mobile GPUs fill pixels fast; cap DPR hard to keep the 60 fps loop.
+      dpr = Math.min(window.devicePixelRatio || 1, touchLayout ? 1.5 : 2);
       canvas.width = Math.round(cssW * dpr);
       canvas.height = Math.round(cssH * dpr);
       canvas.style.height = `${cssH}px`;
@@ -117,6 +153,7 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
 
       const alive = new Set(engine.actors.filter((a) => a.alive).map((a) => a.entity));
       drawMap(ctx, UMBRA_DECK_MAP, cssW, cssH, dpr, {
+        biasY,
         player: engine.player,
         playerAlive: engine.playerActor.alive,
         crewmates: engine.crewmates.filter((c) => alive.has(c)),
@@ -153,6 +190,9 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
     const onKeyDown = (e: KeyboardEvent) => {
       if (typing(e.target)) return;
       const key = e.key.toLowerCase();
+      // Any physical key ends the touch session so a stale joystick vector
+      // can't keep driving the player after hands move back to the keyboard.
+      engine.touchMove = null;
 
       if (isMovementKey(key)) {
         engine.setKey(key, true);
@@ -177,6 +217,7 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
     const onKeyUp = (e: KeyboardEvent) => engine.setKey(e.key.toLowerCase(), false);
     const onBlur = () => {
       for (const k of [...engine.keys]) engine.setKey(k, false);
+      engine.touchMove = null;
     };
 
     window.addEventListener("keydown", onKeyDown);
@@ -209,6 +250,7 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
 
       <GameHud
         snap={snap}
+        compact={isMobile}
         analyst={analyst}
         onToggleAnalyst={() => {
           engine.analystView = !engine.analystView;
@@ -222,10 +264,15 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
         }}
       />
 
+      {isMobile && snap.phase === "playing" && !snap.meeting && !snap.activeTask && (
+        <TouchControls engine={engine} snap={snap} onAction={sync} />
+      )}
+
       {snap.phase === "briefing" && (
         <Briefing
           role={snap.role}
           roster={roster}
+          compact={isMobile}
           onStart={() => {
             engine.begin();
             sync();

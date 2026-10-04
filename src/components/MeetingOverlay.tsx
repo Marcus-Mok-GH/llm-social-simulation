@@ -25,13 +25,19 @@ function Timer({ seconds, danger }: { seconds: number; danger?: boolean }) {
 }
 
 function ChatLog({ messages }: { messages: ChatMessage[] }) {
-  const endRef = useRef<HTMLDivElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
+    // Scroll only the log itself. `scrollIntoView` would also scroll the page,
+    // which on mobile drags the stage off screen the moment a meeting opens.
+    const box = boxRef.current;
+    if (box) box.scrollTop = box.scrollHeight;
   }, [messages.length]);
 
   return (
-    <div className="h-56 space-y-2 overflow-y-auto rounded-lg border border-void-700 bg-void-950/70 p-3">
+    <div
+      ref={boxRef}
+      className="h-40 space-y-2 overflow-y-auto rounded-lg border border-void-700 bg-void-950/70 p-3 sm:h-56"
+    >
       {messages.length === 0 && (
         <p className="text-xs text-slate-600">The room is quiet…</p>
       )}
@@ -53,7 +59,6 @@ function ChatLog({ messages }: { messages: ChatMessage[] }) {
           )}
         </div>
       ))}
-      <div ref={endRef} />
     </div>
   );
 }
@@ -131,14 +136,14 @@ export function MeetingOverlay({ meeting, onSay, onVote, onAdvance }: MeetingOve
   };
 
   return (
-    <div className="absolute inset-0 z-30 flex items-center justify-center bg-void-950/90 px-4 py-6">
+    <div className="absolute inset-0 z-30 flex items-start justify-center overflow-y-auto bg-void-950/90 px-3 py-4 sm:px-4 sm:py-6">
       <motion.div
         initial={{ opacity: 0, y: 18 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.25 }}
-        className="flex max-h-full w-full max-w-3xl flex-col gap-4"
+        className="my-auto flex w-full max-w-3xl flex-col gap-3 sm:gap-4"
       >
-        <div className="flex items-center justify-between rounded-xl border border-hazard/40 bg-hazard/10 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-hazard/40 bg-hazard/10 px-3 py-2.5 sm:px-4 sm:py-3">
           <div>
             <p className="text-[11px] tracking-[0.25em] text-hazard">
               {meeting.reason.toUpperCase()}
@@ -151,7 +156,7 @@ export function MeetingOverlay({ meeting, onSay, onVote, onAdvance }: MeetingOve
                   : "Result"}
             </p>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 sm:gap-4">
             <Timer seconds={meeting.secondsLeft} danger={meeting.stage !== "tally"} />
             {canSpeak && (
               <button
@@ -165,7 +170,7 @@ export function MeetingOverlay({ meeting, onSay, onVote, onAdvance }: MeetingOve
           </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-2 sm:gap-4">
           <div className="space-y-3">
             <ChatLog messages={meeting.messages} />
             {canSpeak && (

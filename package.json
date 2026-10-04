@@ -11,12 +11,13 @@
     "validate:map": "bun scripts/validate-map.ts",
     "validate:render": "bun scripts/validate-render.ts",
     "validate:movement": "bun scripts/validate-movement.ts",
+    "validate:touch": "bun scripts/validate-touch.ts",
     "validate:ai": "bun scripts/validate-ai.ts",
     "validate:imposters": "bun scripts/validate-imposters.ts",
     "validate:ui": "bun scripts/validate-ui.tsx",
     "simulate": "bun scripts/simulate.ts",
     "verify:llm": "bun scripts/verify-llm.ts",
-    "check": "bun run typecheck && bun run validate:map && bun run validate:movement && bun run validate:render && bun run validate:ui && bun run validate:ai && bun run validate:imposters && bun run simulate",
+    "check": "bun run typecheck && bun run validate:map && bun run validate:movement && bun run validate:touch && bun run validate:render && bun run validate:ui && bun run validate:ai && bun run validate:imposters && bun run simulate",
     "convex": "convex dev"
   },
   "dependencies": {
