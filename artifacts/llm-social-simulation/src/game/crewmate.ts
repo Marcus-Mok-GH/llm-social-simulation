@@ -37,9 +37,9 @@ export interface Crewmate {
 
 export const CREWMATE_RADIUS = 15;
 export const CREWMATE_SPEED = 190;
-const IDLE_MIN = 0.4;
-const IDLE_MAX = 1.4;
-const WORK_DURATION = 2.5;
+const IDLE_MIN = 0.7;
+const IDLE_MAX = 1.9;
+const WORK_DURATION = 3.2;
 const ARRIVE_EPS = 9;
 const STUCK_LIMIT = 1.2;
 
@@ -187,6 +187,60 @@ function moveAlongPath(agent: Crewmate, map: GameMap, grid: NavGrid, dt: number)
   } else {
     agent.stagnant = 0;
   }
+}
+
+/**
+ * Drive a crewmate to one specific console. Used by the decision layer, which
+ * picks *which* console; the existing state machine still owns the walking.
+ */
+export function crewmateGotoPoi(
+  agent: Crewmate,
+  map: GameMap,
+  grid: NavGrid,
+  poiId: string,
+): boolean {
+  const poi = map.pointsOfInterest.find((p) => p.id === poiId);
+  if (!poi) return false;
+  const path = findPath(grid, { x: agent.x, y: agent.y }, { x: poi.x, y: poi.y });
+  if (!path || path.length === 0) return false;
+
+  agent.targetPoiId = poi.id;
+  agent.path = path;
+  agent.pathIndex = 0;
+  agent.stagnant = 0;
+  agent.state = "moving";
+  agent.timer = 0;
+  return true;
+}
+
+/** Walk to an arbitrary point (room centre, a body, the meeting table). */
+export function crewmateGotoPoint(
+  agent: Crewmate,
+  map: GameMap,
+  grid: NavGrid,
+  x: number,
+  y: number,
+  keepTarget = false,
+): boolean {
+  const path = findPath(grid, { x: agent.x, y: agent.y }, { x, y });
+  if (!path || path.length === 0) return false;
+
+  agent.path = path;
+  agent.pathIndex = 0;
+  agent.stagnant = 0;
+  agent.state = "moving";
+  agent.timer = 0;
+  if (!keepTarget) agent.targetPoiId = null;
+  return true;
+}
+
+/** Freeze a crewmate in place (meetings, briefing). */
+export function crewmateHalt(agent: Crewmate): void {
+  agent.state = "idle";
+  agent.timer = 0.2;
+  agent.path = [];
+  agent.pathIndex = 0;
+  agent.taskProgress = 0;
 }
 
 /** Advance one crewmate by one tick. */

@@ -26,6 +26,10 @@ if (!basePath) {
 
 export default defineConfig({
   base: basePath,
+  // The game reads its model credentials straight from the environment so the
+  // key never has to be written to a file. `BERGET_API_KEY` is the deployment
+  // variable; `VITE_LLM_*` lets you override endpoint/model per developer.
+  envPrefix: ["VITE_", "BERGET_"],
   plugins: [react()],
   resolve: {
     alias: {

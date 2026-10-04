@@ -5,16 +5,16 @@ import { findPath, followPath, type NavGrid } from "./navigation";
 
 /**
  * Imposter behaviour is intentionally distinct from crewmates: they never run
- * tasks, they follow ("stalk") crewmates instead of patrolling POIs, and they
- * use the map's vent POIs to travel quickly.
- *
- * No perception, no kill/sabotage resolution yet — venting and stalking are
- * internal states only.
+ * real tasks, they follow ("stalk") crewmates instead of patrolling POIs, and
+ * they use the map's vent POIs to travel quickly. Kill resolution, sabotage and
+ * perception live in `engine.ts` — this module only owns *movement*.
  */
 export type ImposterState =
   | "idle"
+  | "walking"
   | "stalking"
   | "observing"
+  | "faking"
   | "seeking_vent"
   | "venting";
 
@@ -48,6 +48,9 @@ export interface Imposter {
   lastVentId: string | null;
   ventCount: number;
 
+  /** Fake-tasking: standing still at a console pretending to work. */
+  fakeProgress: number;
+
   rngState: number;
 }
 
@@ -55,13 +58,20 @@ export const IMPOSTER_RADIUS = 15;
 export const IMPOSTER_SPEED = 230;
 const IDLE_MIN = 0.3;
 const IDLE_MAX = 0.9;
-const STALK_DISTANCE = 95;
+/**
+ * How close a stalker gets before it stops and watches. This must be inside
+ * `KILL_RANGE` (44) in engine terms — hovering at arm's length means an
+ * imposter can spend the whole match observing and never actually kill.
+ */
+const STALK_DISTANCE = 34;
 const STALK_REPATH = 0.7;
-const STALK_GIVEUP = 22;
+const STALK_GIVEUP = 30;
 const OBSERVE_MIN = 1.5;
 const OBSERVE_MAX = 3.0;
 const VENT_TRAVEL = 1.2;
 const STALK_PROB = 0.55;
+/** How long an imposter lingers at a console pretending to work. */
+export const FAKE_DURATION = 4.5;
 
 export const IMPOSTER_COLORS = ["#b21e35", "#7c3aed"] as const;
 export const IMPOSTER_NAMES = ["SHADE", "VEX"] as const;
@@ -150,6 +160,7 @@ export function createImposters(map: GameMap, count = 2, seed = 101): Imposter[]
       ventToId: null,
       lastVentId: start?.id ?? null,
       ventCount: 0,
+      fakeProgress: 0,
       rngState: (seed + i * 7919) | 0 || 1,
     });
   }
@@ -327,6 +338,103 @@ function updateVenting(imp: Imposter, map: GameMap, dt: number): void {
   goIdle(imp);
 }
 
+function updateFaking(imp: Imposter, dt: number): void {
+  imp.timer -= dt;
+  imp.fakeProgress = Math.max(0, 1 - imp.timer / FAKE_DURATION);
+  if (imp.timer > 0) return;
+  imp.fakeProgress = 0;
+  imp.targetPoiId = null;
+  goIdle(imp);
+}
+
+function updateWalking(imp: Imposter, map: GameMap, grid: NavGrid, dt: number): void {
+  const result = followPath(map, imp, dt);
+  if (result === "arrived") {
+    // Reached the ordered point: settle into an alibi or go back to planning.
+    if (imp.targetPoiId) {
+      imp.state = "faking";
+      imp.timer = FAKE_DURATION;
+      imp.fakeProgress = 0;
+      return;
+    }
+    goIdle(imp);
+    return;
+  }
+  if (result === "blocked") {
+    const poi = map.pointsOfInterest.find((p) => p.id === imp.targetPoiId);
+    if (!poi || !pathTo(imp, grid, { x: poi.x, y: poi.y })) goIdle(imp);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Decision-layer entry points — `engine.ts` picks the goal, these walk there.
+// ---------------------------------------------------------------------------
+
+/** Walk to a console and then pretend to work at it (the alibi). */
+export function imposterFakeTask(
+  imp: Imposter,
+  map: GameMap,
+  grid: NavGrid,
+  poiId: string,
+): boolean {
+  const poi = map.pointsOfInterest.find((p) => p.id === poiId);
+  if (!poi) return false;
+  if (!pathTo(imp, grid, { x: poi.x, y: poi.y })) return false;
+  imp.targetPoiId = poi.id;
+  imp.state = "walking";
+  return true;
+}
+
+/** Path to an arbitrary world point with no special action on arrival. */
+export function imposterGotoPoint(imp: Imposter, grid: NavGrid, x: number, y: number): boolean {
+  if (!pathTo(imp, grid, { x, y })) return false;
+  imp.targetPoiId = null;
+  imp.state = "walking";
+  return true;
+}
+
+/** Chase a specific crewmate. */
+export function imposterStalk(
+  imp: Imposter,
+  grid: NavGrid,
+  crewmates: Crewmate[],
+  targetId: number,
+): boolean {
+  const target = crewmates.find((c) => c.id === targetId);
+  if (!target) return false;
+  if (!pathTo(imp, grid, { x: target.x, y: target.y })) return false;
+  imp.targetCrewmateId = target.id;
+  imp.stalkTime = 0;
+  imp.repathTimer = STALK_REPATH;
+  imp.state = "stalking";
+  return true;
+}
+
+/** Walk to a named vent, then take it. */
+export function imposterSeekVent(
+  imp: Imposter,
+  map: GameMap,
+  grid: NavGrid,
+  poiId: string,
+): boolean {
+  const vent = map.pointsOfInterest.find((p) => p.id === poiId && p.kind === "vent");
+  if (!vent) return false;
+  if (!pathTo(imp, grid, { x: vent.x, y: vent.y })) return false;
+  imp.targetPoiId = vent.id;
+  imp.state = "seeking_vent";
+  return true;
+}
+
+/** Freeze an imposter (meetings, briefing). */
+export function imposterHalt(imp: Imposter): void {
+  imp.state = "idle";
+  imp.timer = 0.3;
+  imp.path = [];
+  imp.pathIndex = 0;
+  imp.targetCrewmateId = null;
+  imp.fakeProgress = 0;
+}
+
 /** Advance one imposter by one tick. Crewmates are passed in as stalk targets. */
 export function updateImposter(
   map: GameMap,
@@ -352,6 +460,12 @@ export function updateImposter(
       break;
     case "venting":
       updateVenting(imp, map, dt);
+      break;
+    case "faking":
+      updateFaking(imp, dt);
+      break;
+    case "walking":
+      updateWalking(imp, map, grid, dt);
       break;
   }
 }

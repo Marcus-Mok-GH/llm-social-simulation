@@ -1,0 +1,142 @@
+/**
+ * Live model check.
+ *
+ * Exercises the *real* network path the game uses: `readLlmConfig()` reads the
+ * key from the environment, `intentWithModel` asks for a movement intent and
+ * `statementWithModel` asks for a meeting line. Both are validated exactly as
+ * the engine validates them, so a pass here means agent reasoning works against
+ * the configured endpoint rather than only the heuristic fallback.
+ *
+ * Run: BERGET_API_KEY=sk_ber_... bun scripts/verify-llm.ts
+ */
+
+import { intentWithModel, statementWithModel, type AiContext, type WorldView } from "../src/ai/decision";
+import { readLlmConfig, RequestGate } from "../src/ai/llm";
+import { UMBRA_DECK_MAP } from "../src/game/map";
+import { createMind, bump, remember } from "../src/game/perception";
+
+const cfg = readLlmConfig();
+if (!cfg) {
+  console.error("No API key found (BERGET_API_KEY or VITE_LLM_API_KEY) — cannot verify the model path.");
+  process.exit(2);
+}
+
+console.log(`Endpoint : ${cfg.baseUrl}`);
+console.log(`Model    : ${cfg.model}`);
+console.log(`Key      : ${cfg.apiKey.slice(0, 7)}… (${cfg.apiKey.length} chars)`);
+
+const ai: AiContext = { cfg, gate: new RequestGate(0, 2), budget: { remaining: 20 } };
+
+function view(role: "crew" | "imposter"): WorldView {
+  return {
+    self: {
+      key: role === "imposter" ? "imp:0" : "crew:0",
+      name: role === "imposter" ? "SHADE" : "ROOK",
+      role,
+      roomId: "mess_hall",
+      roomName: "Mess Hall",
+      alive: true,
+    },
+    tasks: [
+      { poiId: "task_mess", label: "Store rations", roomId: "mess_hall", roomName: "Mess Hall", done: false },
+      { poiId: "task_med", label: "Scan vitals", roomId: "infirmary", roomName: "Infirmary", done: true },
+    ],
+    consoles: [
+      { poiId: "task_mess", label: "Store rations", roomId: "mess_hall", roomName: "Mess Hall" },
+      { poiId: "task_med", label: "Scan vitals", roomId: "infirmary", roomName: "Infirmary" },
+      { poiId: "task_power", label: "Reset breaker", roomId: "power_bay", roomName: "Power Bay" },
+    ],
+    vents: ["vent_mess", "vent_med", "vent_power"],
+    others: [
+      { key: "crew:1", name: "VEGA", roomId: "mess_hall", roomName: "Mess Hall", alive: true, visible: true, isolation: 420 },
+      { key: "crew:2", name: "JUNO", roomId: "infirmary", roomName: "Infirmary", alive: true, visible: false, isolation: 90 },
+      { key: "imp:1", name: "VEX", roomId: "hold", roomName: "Hold", alive: true, visible: false, isolation: 300 },
+    ],
+    recent: ["[sighted] Saw VEGA in Mess Hall not long ago."],
+    suspicions: [{ name: "VEGA", score: 0.4 }],
+    sabotage: null,
+    cooldowns: { kill: role === "imposter" ? 0 : 99, sabotage: role === "imposter" ? 0 : 99 },
+    bodyOutstanding: false,
+    taskProgress: 0.35,
+  };
+}
+
+let failures = 0;
+function check(cond: boolean, msg: string): void {
+  if (!cond) {
+    failures++;
+    console.error(`  ✗ ${msg}`);
+  } else {
+    console.log(`  ✓ ${msg}`);
+  }
+}
+
+// --- 1. Movement intent -----------------------------------------------------
+for (const role of ["crew", "imposter"] as const) {
+  const intent = await intentWithModel(ai, view(role));
+  console.log(`\n[${role}] intent:`, JSON.stringify(intent));
+  check(intent !== null, `${role} agent returned a validated intent`);
+
+  if (intent && intent.action === "sabotage") {
+    check(role === "imposter", "sabotage is only accepted from an imposter");
+  }
+  if (intent && (intent.action === "stalk" || intent.action === "hunt")) {
+    check(role === "imposter", "staking/hunting is only accepted from an imposter");
+  }
+}
+
+// --- 2. Meeting dialogue ----------------------------------------------------
+const mind = createMind("crew:0", "crew");
+remember(mind, {
+  t: 40,
+  kind: "kill",
+  actorKey: "imp:0",
+  roomId: "infirmary",
+  text: "Watched SHADE kill PIKE.",
+});
+bump(mind, "imp:0", 0.95);
+
+const names = { "crew:0": "ROOK", "crew:1": "VEGA", "imp:0": "SHADE", "imp:1": "VEX", player: "ORION" };
+
+const stmt = await statementWithModel(
+  ai,
+  UMBRA_DECK_MAP,
+  mind,
+  { key: "crew:0", name: "ROOK" },
+  names,
+  {
+    others: ["crew:0", "crew:1", "imp:0", "player"],
+    playerLine: "I was in the mess hall the whole time.",
+    bodiesFound: 1,
+    ejectedSoFar: [],
+  },
+);
+
+console.log("\n[meeting] statement:", JSON.stringify(stmt));
+check(stmt !== null, "agent produced a validated meeting statement");
+check((stmt?.line.length ?? 0) > 8, "statement is a real sentence");
+if (stmt?.accuse) {
+  check(Object.keys(names).includes(stmt.accuse), "accusation maps back to a real agent key");
+}
+
+// --- 3. Imposter deflection ------------------------------------------------
+const impMind = createMind("imp:0", "imposter", ["imp:1"]);
+bump(impMind, "crew:1", 0.3);
+const impStmt = await statementWithModel(
+  ai,
+  UMBRA_DECK_MAP,
+  impMind,
+  { key: "imp:0", name: "SHADE" },
+  names,
+  { others: ["crew:0", "crew:1", "imp:1"], playerLine: "SHADE was near the vents.", bodiesFound: 1, ejectedSoFar: [] },
+);
+console.log("\n[meeting] imposter line:", JSON.stringify(impStmt));
+check(impStmt !== null, "imposter produced a validated meeting statement");
+check(impStmt?.accuse !== "imp:1", "imposter never accuses its secret ally");
+
+console.log(`\nModel requests used: ${20 - ai.budget.remaining}`);
+if (failures > 0) {
+  console.error(`\n${failures} check(s) failed`);
+  process.exit(1);
+}
+console.log("Live model integration passed ✓");
