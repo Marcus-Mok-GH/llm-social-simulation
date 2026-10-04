@@ -118,7 +118,7 @@ export const INTERACT_RANGE = 52;
  */
 export const OVERTIME_AT = 300;
 export const MATCH_LIMIT = 600;
-const DISCUSSION_TIME = 24;
+const DISCUSSION_TIME = 60;
 const VOTING_TIME = 20;
 const TALLY_TIME = 6;
 const LLM_BUDGET = 150;
