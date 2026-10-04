@@ -190,11 +190,12 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
     const onKeyDown = (e: KeyboardEvent) => {
       if (typing(e.target)) return;
       const key = e.key.toLowerCase();
-      // Any physical key ends the touch session so a stale joystick vector
-      // can't keep driving the player after hands move back to the keyboard.
-      engine.touchMove = null;
 
       if (isMovementKey(key)) {
+        // Hand back to the keyboard: drop the stick so a released thumb can't
+        // resume driving the player once the key comes up. Only movement keys
+        // do this — pressing `e` or Shift must not stop a held joystick.
+        engine.touchMove = null;
         engine.setKey(key, true);
         e.preventDefault();
         return;

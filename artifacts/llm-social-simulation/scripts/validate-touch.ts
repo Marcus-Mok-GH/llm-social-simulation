@@ -67,7 +67,41 @@ check(
   `diag=${diagonal.toFixed(2)} straight=${straight.toFixed(2)}`,
 );
 
-// 5. the thumb controls show the right actions for the player's role
+// 5. `interact()` tells the caller when it took over the screen. The touch
+//    UI uses that to decide whether it may keep "E" held: a task or meeting
+//    unmounts the controls, so latching the key there would leave it stuck.
+const atPoi = (id: string) => {
+  const engine = new GameEngine({ playerIsImposter: false, llm: false });
+  engine.begin();
+  const poi = engine.map.pointsOfInterest.find((p) => p.id === id);
+  if (!poi) throw new Error(`missing POI ${id}`);
+  engine.player.x = poi.x;
+  engine.player.y = poi.y;
+  return engine;
+};
+
+const taskEngine = atPoi("task_mess");
+taskEngine.interact();
+check(
+  "interacting with a task reports the open task",
+  Boolean(taskEngine.activeTask) && taskEngine.meeting === null,
+);
+
+const meetingEngine = atPoi("emergency");
+meetingEngine.interact();
+check(
+  "interacting with the beacon reports the open meeting",
+  meetingEngine.meeting !== null,
+);
+
+const repairEngine = atPoi("sab_power");
+repairEngine.interact();
+check(
+  "interacting at a repair console keeps hold-to-repair available",
+  repairEngine.activeTask === null && repairEngine.meeting === null,
+);
+
+// 6. the thumb controls show the right actions for the player's role
 const render = (playerIsImposter: boolean) => {
   const engine = new GameEngine({ playerIsImposter, llm: false });
   engine.begin();

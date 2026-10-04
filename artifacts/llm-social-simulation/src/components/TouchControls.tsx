@@ -162,10 +162,22 @@ function ActionButton({
 export function TouchControls({ engine, snap, onAction }: TouchControlsProps) {
   const isImposter = snap.role === "imposter";
 
-  // "E" must stay held while repairing a sabotage, exactly like the key does.
+  // These controls unmount whenever a task or meeting takes over the screen, so
+  // never leave a key latched behind them.
+  useEffect(
+    () => () => {
+      engine.setKey("e", false);
+      engine.touchMove = null;
+    },
+    [engine],
+  );
+
+  // "E" must stay held while repairing a sabotage, exactly like the key does —
+  // but only when the press did not open a modal, because that unmounts this
+  // component before pointer-up could release the key.
   const pressInteract = () => {
-    engine.setKey("e", true);
     engine.interact();
+    if (!engine.activeTask && !engine.meeting) engine.setKey("e", true);
     onAction();
   };
   const releaseInteract = () => {
