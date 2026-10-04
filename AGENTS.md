@@ -2,7 +2,7 @@
 
 ## Shipping changes
 
-Push directly to github for ALL changes.
+Push directly to origin/main for ALL changes.
 
 ## Commit messages
 
