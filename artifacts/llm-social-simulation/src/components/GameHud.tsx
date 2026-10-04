@@ -79,6 +79,45 @@ export function GameHud({
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 select-none">
+      {/* Sabotage alarm. Instead of a card parked over the deck, the whole
+          stage breathes red → clear → red until the fault is fixed; only a
+          hairline countdown on the top edge touches the view. */}
+      {snap.sabotage && (
+        <>
+          <div
+            aria-hidden
+            className={cn(
+              "sabotage-flash absolute inset-0 -z-10",
+              snap.sabotage.secondsLeft <= 10 && "sabotage-flash--critical",
+            )}
+          />
+          <div
+            className="absolute inset-x-0 top-0 h-[3px] bg-[#ff2d4d]/25"
+            title={`${snap.sabotage.kind === "meltdown" ? "Reactor meltdown" : "Grid overload"} — ${snap.sabotage.secondsLeft.toFixed(1)}s`}
+          >
+            <div
+              className="h-full bg-[#ff2d4d]"
+              style={{
+                width: `${
+                  Math.max(
+                    0,
+                    Math.min(1, snap.sabotage.secondsLeft / snap.sabotage.duration),
+                  ) * 100
+                }%`,
+              }}
+            />
+            <span className="sr-only">
+              {snap.sabotage.kind === "meltdown" ? "Reactor meltdown" : "Grid overload"},{" "}
+              {Math.ceil(snap.sabotage.secondsLeft)} seconds left. Repair at the
+              {snap.sabotage.kind === "meltdown"
+                ? " reactor or life support"
+                : " power bay"}
+              .
+            </span>
+          </div>
+        </>
+      )}
+
       {/* Top bar */}
       <div className="flex flex-wrap items-start justify-between gap-3 p-3">
         <div className="flex flex-wrap items-center gap-2">
@@ -123,30 +162,6 @@ export function GameHud({
         </div>
         <Meter value={snap.taskProgress} tone="signal" />
       </div>
-
-      {/* Sabotage banner */}
-      {snap.sabotage && (
-        <div className="mx-auto mt-3 w-full max-w-md px-3">
-          <div className="rounded-lg border border-hazard/60 bg-hazard/15 px-3 py-2 backdrop-blur-sm">
-            <div className="flex items-center justify-between text-[10px] tracking-widest text-hazard">
-              <span className="animate-pulseGlow">
-                {snap.sabotage.kind === "meltdown" ? "REACTOR MELTDOWN" : "GRID OVERLOAD"}
-              </span>
-              <span className="tabular-nums">
-                {snap.sabotage.secondsLeft.toFixed(1)}s
-              </span>
-            </div>
-            <div className="mt-1.5">
-              <Meter value={snap.sabotage.fixProgress} tone="hazard" />
-            </div>
-            <p className="mt-1 text-[10px] text-hazard/80">
-              {snap.sabotage.kind === "meltdown"
-                ? "Repair at the reactor or life support — hold E."
-                : "Repair at the power bay — hold E."}
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Compact layout: the task list collapses to a chip under the meter so
           the deck keeps its space; opening it overlays the (fogged) map. */}

@@ -45,3 +45,56 @@
     font-family: "Orbitron", ui-sans-serif, system-ui, sans-serif;
   }
 }
+
+/* ---------------------------------------------------------------------
+   Sabotage alarm
+
+   While a fault is live the whole stage breathes red → clear → red until it
+   is fixed, instead of a message card parked over the deck. The tint is a
+   vignette (strongest at the edges) so the middle of the map stays legible,
+   and it sits behind the HUD because the stage applies it at -z-10.
+   --------------------------------------------------------------------- */
+@keyframes sabotage-flash {
+  0%,
+  100% {
+    opacity: 0.05;
+  }
+  50% {
+    opacity: 0.42;
+  }
+}
+
+@keyframes sabotage-flash-critical {
+  0%,
+  100% {
+    opacity: 0.12;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.sabotage-flash {
+  background: radial-gradient(
+    120% 90% at 50% 55%,
+    rgba(255, 45, 70, 0.2) 0%,
+    rgba(255, 35, 60, 0.58) 55%,
+    rgba(214, 12, 45, 0.95) 100%
+  );
+  animation: sabotage-flash 1.35s ease-in-out infinite;
+}
+
+/* Last ten seconds: faster and hotter. */
+.sabotage-flash--critical {
+  animation-name: sabotage-flash-critical;
+  animation-duration: 0.8s;
+}
+
+/* A pulsing flash is a strobe — hold a steady tint instead. */
+@media (prefers-reduced-motion: reduce) {
+  .sabotage-flash,
+  .sabotage-flash--critical {
+    animation: none;
+    opacity: 0.3;
+  }
+}

@@ -111,6 +111,12 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
         false;
       const touchLayout = coarse || window.innerWidth < 768;
       const byWidth = cssW * (UMBRA_DECK_MAP.height / UMBRA_DECK_MAP.width);
+      // How much room the stage has from its top edge to the bottom of the
+      // viewport. On desktop the deck grows into all of it so the whole
+      // station is on screen at the largest size that fits without scrolling
+      // (computeTransform letterboxes the remainder).
+      const docTop = wrap.getBoundingClientRect().top + window.scrollY;
+      const fitH = Math.max(240, window.innerHeight - docTop - 16);
       let byLayout = byWidth;
       biasY = 0.5;
       if (touchLayout) {
@@ -127,6 +133,11 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
           // HUD overlays it, but never let the stage exceed the viewport.
           byLayout = Math.min(byWidth, vh * 0.85);
         }
+      } else {
+        // On a short window the chrome is a big share of the height, and a
+        // strict fit would shrink the deck to a stamp — there, let it run past
+        // the fold (scrolling a little) instead of getting smaller.
+        byLayout = Math.min(byWidth, Math.max(fitH, window.innerHeight * 0.75));
       }
       cssH = Math.max(1, Math.round(byLayout));
       // Mobile GPUs fill pixels fast; cap DPR hard to keep the 60 fps loop.
@@ -138,6 +149,9 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(wrap);
+    // Window height changes do not resize the wrapper, and the fit depends on
+    // the viewport, so listen for those directly.
+    window.addEventListener("resize", resize);
 
     engine.onMatchEnd = (winner) => {
       const record = buildRecord(engine, winner);
@@ -176,6 +190,7 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
     return () => {
       cancelAnimationFrame(raf);
       window.clearInterval(uiTimer);
+      window.removeEventListener("resize", resize);
       observer.disconnect();
       engine.onMatchEnd = null;
     };

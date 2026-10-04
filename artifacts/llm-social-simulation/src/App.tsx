@@ -44,8 +44,8 @@ export default function App() {
   const [matches, setMatches] = useState<MatchRecord[]>(() => loadMatches());
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 sm:py-10">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-void-800 pb-4">
+    <div className="mx-auto w-full max-w-[1600px] px-4 py-3 sm:px-6 sm:py-4">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-void-800 pb-2">
         <div className="flex items-baseline gap-3">
           <h1 className="font-display text-base font-bold tracking-[0.3em] text-slate-100">
             UMBRA STATION
@@ -57,16 +57,19 @@ export default function App() {
         <ProviderStatus />
       </header>
 
-      <main className="py-8">
-        <h2 className="font-display text-2xl font-black leading-tight tracking-tight text-white sm:text-3xl">
-          Trust no one aboard the station.
-        </h2>
-        <p className="mt-3 max-w-xl text-sm leading-relaxed text-slate-400">
-          One crew member among AI agents that see only what the fog allows,
-          remember it, and argue about it — each running on a different model.
-        </p>
+      <main className="pt-4">
+        {/* One compact hero row: the deck below gets every spare pixel. */}
+        <div className="flex flex-wrap items-baseline justify-between gap-x-8 gap-y-1">
+          <h2 className="font-display text-lg font-black leading-tight tracking-tight text-white sm:text-xl">
+            Trust no one aboard the station.
+          </h2>
+          <p className="max-w-3xl text-[11px] leading-snug text-slate-400 sm:text-xs">
+            One crew member among AI agents that see only what the fog allows,
+            remember it, and argue about it — each running on a different model.
+          </p>
+        </div>
 
-        <section className="mt-6">
+        <section className="mt-4">
           <GameStage history={matches} onHistoryChange={setMatches} />
 
           <ul className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-[11px] text-slate-500">

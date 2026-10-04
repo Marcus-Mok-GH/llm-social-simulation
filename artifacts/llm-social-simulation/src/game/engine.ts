@@ -233,7 +233,14 @@ export interface Snapshot {
   prompt: string | null;
   killCooldown: number;
   sabotageCooldown: number;
-  sabotage: { kind: SabotageKind; secondsLeft: number; fixPoiId: string; fixProgress: number } | null;
+  sabotage: {
+    kind: SabotageKind;
+    secondsLeft: number;
+    /** Total length of this sabotage, so the UI can draw a countdown. */
+    duration: number;
+    fixPoiId: string;
+    fixProgress: number;
+  } | null;
   visionRange: number;
   bodies: number;
   alive: { crew: number; imposter: number };
@@ -1731,6 +1738,7 @@ export class GameEngine {
         ? {
             kind: this.sabotage.kind,
             secondsLeft: Math.max(0, this.sabotage.secondsLeft),
+            duration: this.sabotage.kind === "meltdown" ? MELTDOWN_TIME : BLACKOUT_TIME,
             fixPoiId: this.sabotage.fixPoiIds[0],
             fixProgress: Math.min(1, this.sabotage.fixProgress / REPAIR_TIME),
           }
