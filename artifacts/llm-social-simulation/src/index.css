@@ -27,6 +27,27 @@
       radial-gradient(1200px 600px at 15% -10%, rgba(56, 225, 200, 0.08), transparent 60%),
       radial-gradient(900px 500px at 90% 0%, rgba(255, 176, 32, 0.06), transparent 55%);
     background-attachment: fixed;
+    /* Touch ergonomics: no double-tap zoom on controls, no pull-to-refresh
+       mid-match, no rubber-banding off the page edges. */
+    touch-action: manipulation;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Phones/tablets: fixed backgrounds repaint on every scroll frame, so let
+     them scroll naturally below the desktop breakpoint. */
+  @media (max-width: 767px) {
+    body {
+      background-attachment: scroll;
+    }
+  }
+
+  /* Keep interactive edges clear of notches and home indicators. */
+  @supports (padding: env(safe-area-inset-bottom)) {
+    body {
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
+    }
   }
 
   h1,

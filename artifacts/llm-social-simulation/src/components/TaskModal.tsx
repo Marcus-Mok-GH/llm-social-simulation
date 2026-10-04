@@ -52,7 +52,7 @@ function Wiring({ seed, onDone }: { seed: number; onDone: () => void }) {
   };
 
   return (
-    <div className="flex items-center justify-between gap-6">
+    <div className="flex items-center justify-between gap-3 sm:gap-6">
       <div className="flex flex-col gap-3">
         {WIRE_COLORS.map((c) => (
           <button
@@ -62,7 +62,7 @@ function Wiring({ seed, onDone }: { seed: number; onDone: () => void }) {
             disabled={linked.includes(c)}
             aria-label={`left terminal ${c}`}
             className={cn(
-              "h-9 w-9 rounded-md border-2 transition",
+              "h-11 w-11 rounded-md border-2 transition sm:h-9 sm:w-9",
               linked.includes(c) && "opacity-30",
               selected === c && "scale-110 ring-2 ring-white/60",
             )}
@@ -90,7 +90,7 @@ function Wiring({ seed, onDone }: { seed: number; onDone: () => void }) {
             disabled={linked.includes(c)}
             aria-label={`right terminal ${c}`}
             className={cn(
-              "h-9 w-9 rounded-md border-2 transition",
+              "h-11 w-11 rounded-md border-2 transition sm:h-9 sm:w-9",
               linked.includes(c) && "opacity-30",
               error && "animate-pulse",
             )}
@@ -213,8 +213,8 @@ export function TaskModal({ label, room, kind, onComplete, onFail }: TaskModalPr
   const seed = label.length * 31 + room.length;
 
   return (
-    <div className="absolute inset-0 z-30 flex items-center justify-center bg-void-950/85 px-4">
-      <div className="w-full max-w-md rounded-xl border border-void-700 bg-void-900 p-6 shadow-2xl">
+    <div className="absolute inset-0 z-30 flex items-start justify-center overflow-y-auto bg-void-950/85 px-3 py-4 sm:px-4 sm:py-6">
+      <div className="my-auto w-full max-w-md rounded-xl border border-void-700 bg-void-900 p-4 shadow-2xl sm:p-6">
         <div className="mb-1 flex items-center justify-between">
           <span className="text-[11px] tracking-[0.25em] text-hazard">CONSOLE</span>
           <span className="font-mono text-[11px] text-slate-500">

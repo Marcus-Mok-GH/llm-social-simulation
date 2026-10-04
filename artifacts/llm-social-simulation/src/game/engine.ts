@@ -46,7 +46,7 @@ import {
   updateImposter,
   type Imposter,
 } from "./imposter";
-import { inputVectorFromKeys } from "./input";
+import { inputVectorFromKeys, type MoveInput } from "./input";
 import {
   nearestPoi,
   roomAt,
@@ -284,6 +284,8 @@ export class GameEngine {
   emergencyCooldown = 0;
 
   keys = new Set<string>();
+  /** Analog movement vector from the on-screen joystick (touch devices). */
+  touchMove: MoveInput | null = null;
   log: string[] = [];
   messages: ChatMessage[] = [];
 
@@ -512,6 +514,16 @@ export class GameEngine {
   setKey(key: string, down: boolean): void {
     if (down) this.keys.add(key);
     else this.keys.delete(key);
+  }
+
+  /**
+   * Keyboard wins while a movement key is held; otherwise the touch
+   * joystick's analog vector is used so both inputs can coexist.
+   */
+  private moveInput(): MoveInput {
+    const keys = inputVectorFromKeys(this.keys);
+    if (keys.x !== 0 || keys.y !== 0) return keys;
+    return this.touchMove ?? keys;
   }
 
   begin(): void {
@@ -1536,7 +1548,7 @@ export class GameEngine {
 
     // --- playing ----------------------------------------------------------
     const playerActor = this.playerActor;
-    updatePlayer(this.map, this.player, inputVectorFromKeys(this.keys), dt);
+    updatePlayer(this.map, this.player, this.moveInput(), dt);
     if (playerActor.alive) revealAround(this.vis, this.player.x, this.player.y, 140);
 
     const livingCrew = this.crewmates.filter((c) => {

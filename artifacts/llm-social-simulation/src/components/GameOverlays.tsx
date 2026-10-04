@@ -14,19 +14,21 @@ export interface RosterRow {
 interface BriefingProps {
   role: "crew" | "imposter";
   roster: RosterRow[];
+  /** Show touch control hints instead of the keyboard legend. */
+  compact?: boolean;
   onStart: () => void;
 }
 
 /** Pre-match role reveal: who you are, who else is on the deck. */
-export function Briefing({ role, roster, onStart }: BriefingProps) {
+export function Briefing({ role, roster, compact = false, onStart }: BriefingProps) {
   const imposter = role === "imposter";
   return (
-    <div className="absolute inset-0 z-30 flex items-center justify-center bg-void-950/92 px-4">
+    <div className="absolute inset-0 z-30 flex items-start justify-center overflow-y-auto bg-void-950/92 px-3 py-4 sm:px-4 sm:py-6">
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.35 }}
-        className="w-full max-w-lg rounded-2xl border border-void-700 bg-void-900/90 p-6 text-center shadow-2xl"
+        className="my-auto w-full max-w-lg rounded-2xl border border-void-700 bg-void-900/90 p-5 text-center shadow-2xl sm:p-6"
       >
         <p className="text-[11px] tracking-[0.3em] text-slate-500">UMBRA STATION · DECK K7</p>
         <h2 className="mt-3 font-display text-3xl font-black text-white">
@@ -71,7 +73,9 @@ export function Briefing({ role, roster, onStart }: BriefingProps) {
           BEGIN SHIFT
         </button>
         <p className="mt-3 text-[10px] tracking-widest text-slate-600">
-          WASD / ARROWS MOVE · E INTERACT · R REPORT
+          {compact
+            ? "DRAG THE STICK TO MOVE · USE INTERACTS · TAP REPORT"
+            : "WASD / ARROWS MOVE · E INTERACT · R REPORT"}
         </p>
       </motion.div>
     </div>
@@ -89,11 +93,11 @@ export function EndScreen({ snap, history, onRestart }: EndScreenProps) {
   const last = history[0];
 
   return (
-    <div className="absolute inset-0 z-30 flex items-center justify-center overflow-y-auto bg-void-950/94 px-4 py-8">
+    <div className="absolute inset-0 z-30 flex items-start justify-center overflow-y-auto bg-void-950/94 px-3 py-6 sm:px-4 sm:py-8">
       <motion.div
         initial={{ opacity: 0, scale: 0.97 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="w-full max-w-xl rounded-2xl border border-void-700 bg-void-900/95 p-6 shadow-2xl"
+        className="my-auto w-full max-w-xl rounded-2xl border border-void-700 bg-void-900/95 p-5 shadow-2xl sm:p-6"
       >
         <div className="flex items-center gap-3">
           <span
