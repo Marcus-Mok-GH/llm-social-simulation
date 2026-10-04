@@ -2,7 +2,7 @@
 
 ## Shipping changes
 
-Remember, create a PR for complex changes, including for complicated backend changes, but if it's a simple frontend change, just push it directly.
+Push directly to github for ALL changes.
 
 ## Commit messages
 
