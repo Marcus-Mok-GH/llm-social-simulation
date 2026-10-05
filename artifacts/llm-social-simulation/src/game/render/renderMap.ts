@@ -1,10 +1,4 @@
-import type {
-  Corridor,
-  GameMap,
-  PointOfInterest,
-  Rect,
-  Room,
-} from "../map";
+import type { GameMap, PointOfInterest, Rect } from "../map";
 import type { Player } from "../player";
 import type { Crewmate } from "../crewmate";
 import type { Imposter } from "../imposter";
@@ -18,13 +12,10 @@ export interface ViewTransform {
 
 const COLORS = {
   space: "#05070d",
-  grid: "rgba(56, 225, 200, 0.06)",
-  corridorFill: "#141d2e",
-  corridorStroke: "#26334a",
-  roomFill: "#182135",
-  roomStroke: "#32435f",
-  label: "#cbd5e1",
-  labelDim: "#64748b",
+  /** Darkening laid over the official artwork so actors and fog read on it. */
+  artTint: "rgba(4, 7, 14, 0.34)",
+  label: "#e2e8f3",
+  labelDim: "#93a3bd",
 } as const;
 
 const POI_COLORS: Record<PointOfInterest["kind"], string> = {
@@ -66,30 +57,6 @@ function roundRect(
   ctx.arcTo(x, y + h, x, y, radius);
   ctx.arcTo(x, y, x + w, y, radius);
   ctx.closePath();
-}
-
-function drawCorridors(
-  ctx: CanvasRenderingContext2D,
-  corridors: Corridor[],
-): void {
-  for (const c of corridors) {
-    ctx.fillStyle = COLORS.corridorFill;
-    ctx.fillRect(c.x, c.y, c.w, c.h);
-    ctx.strokeStyle = COLORS.corridorStroke;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(c.x + 1, c.y + 1, c.w - 2, c.h - 2);
-  }
-}
-
-function drawRooms(ctx: CanvasRenderingContext2D, rooms: Room[]): void {
-  for (const r of rooms) {
-    ctx.fillStyle = COLORS.roomFill;
-    roundRect(ctx, r, 14);
-    ctx.fill();
-    ctx.strokeStyle = COLORS.roomStroke;
-    ctx.lineWidth = 3;
-    ctx.stroke();
-  }
 }
 
 function drawPoi(ctx: CanvasRenderingContext2D, poi: PointOfInterest): void {
@@ -312,25 +279,6 @@ function drawStalkLink(
   ctx.restore();
 }
 
-function drawGrid(
-  ctx: CanvasRenderingContext2D,
-  map: GameMap,
-  step: number,
-): void {
-  ctx.strokeStyle = COLORS.grid;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let x = 0; x <= map.width; x += step) {
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, map.height);
-  }
-  for (let y = 0; y <= map.height; y += step) {
-    ctx.moveTo(0, y);
-    ctx.lineTo(map.width, y);
-  }
-  ctx.stroke();
-}
-
 // ---------------------------------------------------------------------------
 // Fog of war
 // ---------------------------------------------------------------------------
@@ -379,6 +327,12 @@ export interface FogLayer {
 }
 
 export interface Scene {
+  /**
+   * The official Skeld artwork, drawn stretched across the world rect as the
+   * deck itself. This is the map now — the vector rooms and corridors are gone.
+   * Absent (e.g. a headless run) the deck is simply the dark space backdrop.
+   */
+  background?: CanvasImageSource | null;
   player?: Player | null;
   playerAlive?: boolean;
   crewmates?: Crewmate[];
@@ -419,9 +373,13 @@ export function drawMap(
     dpr * t.offsetX,
     dpr * t.offsetY,
   );
-  drawGrid(ctx, map, 80);
-  drawCorridors(ctx, map.corridors);
-  drawRooms(ctx, map.rooms);
+  // The official Among Us artwork *is* the deck. Gameplay markers, actors and
+  // fog all render on top of it, so the map still plays exactly as before.
+  if (scene.background) {
+    ctx.drawImage(scene.background, 0, 0, map.width, map.height);
+    ctx.fillStyle = COLORS.artTint;
+    ctx.fillRect(0, 0, map.width, map.height);
+  }
   for (const poi of map.pointsOfInterest) drawPoi(ctx, poi);
 
   if (reveal) {

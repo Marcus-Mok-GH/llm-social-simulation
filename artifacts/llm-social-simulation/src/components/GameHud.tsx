@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { BrainCircuit, Eye, Map as MapIcon } from "lucide-react";
+import { Eye } from "lucide-react";
 import type { Snapshot } from "@/game/engine";
 import { cn } from "@/lib/utils";
 
@@ -9,11 +9,6 @@ interface GameHudProps {
   compact?: boolean;
   analyst: boolean;
   onToggleAnalyst: () => void;
-  llmOn: boolean;
-  onToggleLlm: () => void;
-  /** The Skeld reference image overlay. */
-  mapOpen: boolean;
-  onToggleMap: () => void;
 }
 
 function Chip({
@@ -63,10 +58,6 @@ export function GameHud({
   compact = false,
   analyst,
   onToggleAnalyst,
-  llmOn,
-  onToggleLlm,
-  mapOpen,
-  onToggleMap,
 }: GameHudProps) {
   const isImposter = snap.role === "imposter";
   const aliveCount = snap.alive.crew + snap.alive.imposter;
@@ -147,22 +138,6 @@ export function GameHud({
           >
             <Eye className="h-3 w-3" />
             ANALYST
-          </Chip>
-          <Chip
-            active={llmOn}
-            onClick={onToggleLlm}
-            title="Use the configured model provider for agent reasoning and meeting dialogue"
-          >
-            <BrainCircuit className="h-3 w-3" />
-            {llmOn ? "LLM ON" : "LLM OFF"}
-          </Chip>
-          <Chip
-            active={mapOpen}
-            onClick={onToggleMap}
-            title="Show the Skeld station map"
-          >
-            <MapIcon className="h-3 w-3" />
-            MAP
           </Chip>
         </div>
       </div>

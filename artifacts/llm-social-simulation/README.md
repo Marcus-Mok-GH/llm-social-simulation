@@ -10,7 +10,7 @@ to trust, and **argue and vote** in meetings.
 
 | System | Notes |
 |---|---|
-| Map & renderer | The Skeld: 15 locations / 10 corridors, Canvas 2D, camera-fit, A\* navigation grid |
+| Map & renderer | The official Skeld artwork as the deck, Canvas 2D, camera-fit, A\* navigation grid |
 | **Vision fog** | Ray-cast visibility polygon + persistent "explored" memory, with wall occlusion |
 | Player | WASD movement, wall collision, contextual actions, spectator mode when dead |
 | **Tasks** | Per-agent task lists, shared station bar, two playable minigames (wiring, calibration) |
@@ -22,13 +22,14 @@ to trust, and **argue and vote** in meetings.
 | **LLM decision loop** | A configurable OpenAI-compatible provider (Pollinations or Berget) returns validated JSON intents (`MOVE`/`INTERACT`/`VENT`/`SABOTAGE`) and meeting lines; each AI agent runs a **different** model from a cheap-model pool, with heuristic fallback on any failure |
 | **Persistence** | Finished matches, transcripts and every agent's suspicion snapshot saved to `localStorage` |
 | Analyst view | Optional overlay showing each agent's current top suspect |
-| **Reference map** | A `MAP` chip overlays the official Skeld artwork (`public/skeld-map.webp`) for comparison with the playable deck |
+| **Deck artwork** | The official Skeld art (`public/skeld-map.webp`) is the deck itself: actors, task markers and fog render on top of it |
 
 **Map provenance.** The deck layout is The Skeld from *Among Us* — 14 rooms plus
 the named Hallway, the seven corridors of the real ship, 14 vent grates in six
 chains, four hallway cameras, and the sabotage consoles where they are on the
 real map. All of it lives as data in `src/game/map.ts`; the artwork in
-`public/skeld-map.webp` is © Innersloth and is shown as a reference overlay only.
+`public/skeld-map.webp` is © Innersloth and is drawn as the deck, with the game
+markers and fog composited over it.
 Everything else — station name, crew, roles, dialogue, task presentation and the
 rest of the art — is original.
 
@@ -107,8 +108,8 @@ POLLINATIONS_API_KEY=... pnpm --filter @workspace/llm-social-simulation run veri
 ```
 
 - `scripts/validate-*.ts` — map data, collision, renderer draw calls (including
-  the fog layer and analyst view), the React tree rendered to a string, crewmate
-  pathing, imposter behaviour.
+  the deck artwork, fog layer and analyst view), the React tree rendered to a
+  string, crewmate pathing, imposter behaviour.
 - `scripts/simulate.ts` — replays complete matches headlessly and asserts that
   perception, memory, kills, meetings, ejections, the task bar and the win
   conditions all actually fired. Deterministic: same seed, same result.

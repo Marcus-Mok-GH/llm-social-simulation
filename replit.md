@@ -69,9 +69,10 @@ Environment:
 - **The Skeld, credited.** The deck is The Skeld from Among Us (© Innersloth),
   ported as data in `src/game/map.ts` — 15 locations (14 rooms + Hallway), 7
   corridors as hubs, 14 vent grates in six chains, Reactor hand scanners and the
-  Electrical lights panel. The MAP chip overlays the official art
-  (`public/skeld-map.webp`, provenance noted in the artifact README). Station
-  name, crew, roles, dialogue and the rest of the presentation remain original.
+  Electrical lights panel. The official art (`public/skeld-map.webp`) is drawn
+  as the deck itself, with the actors, task markers and fog on top (provenance
+  noted in the artifact README). Station name, crew, roles, dialogue and the
+  rest of the presentation remain original.
 
 ## Product
 

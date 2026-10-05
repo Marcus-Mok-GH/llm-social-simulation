@@ -626,10 +626,6 @@ export class GameEngine {
     this.system("Match started — find the imposters or finish the tasks.");
   }
 
-  toggleLlm(on: boolean): void {
-    this.llmEnabled = on;
-  }
-
   // -- perception ----------------------------------------------------------
 
   private visible(observer: Actor, tx: number, ty: number): boolean {

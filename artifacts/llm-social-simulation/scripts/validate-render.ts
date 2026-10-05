@@ -1,7 +1,7 @@
 /**
  * Headless smoke test for the canvas renderer. Runs drawMap against a recording
  * mock 2D context (no DOM needed) to prove the drawing code executes
- * end-to-end and actually issues draw calls for rooms / corridors / POIs, for
+ * end-to-end and actually issues draw calls for the deck artwork / POIs, for
  * the actors, and for the fog layer.
  *
  * Run: bun scripts/validate-render.ts
@@ -36,25 +36,33 @@ function makeCtx(calls: string[]): CanvasRenderingContext2D {
 const count = (calls: string[], name: string) =>
   calls.filter((c) => c === name).length;
 
-// --- Pass 1: map only -------------------------------------------------------
+// --- Pass 1: the deck artwork + markers ------------------------------------
+// The renderer paints the official artwork as the deck, so it is handed a
+// stand-in image source; only drawImage's geometry matters here.
+const artwork = { width: 1800, height: 1007 } as unknown as CanvasImageSource;
 const mapCalls: string[] = [];
 try {
-  drawMap(makeCtx(mapCalls), map, 960, 600, 1);
+  drawMap(makeCtx(mapCalls), map, 960, 600, 1, { background: artwork });
 } catch (err) {
-  console.error("drawMap (map only) threw:", err);
+  console.error("drawMap (deck artwork) threw:", err);
   process.exit(1);
 }
 
-const required = ["fillRect", "strokeRect", "fillText", "arc", "arcTo", "fill", "stroke"] as const;
+const required = ["fillRect", "fillText", "arc", "fill", "stroke"] as const;
 const missing = required.filter((name) => count(mapCalls, name) === 0);
 if (missing.length) {
   console.error(`drawMap did not call: ${missing.join(", ")}`);
   process.exit(1);
 }
 
-const minFills = map.rooms.length + map.corridors.length;
-if (count(mapCalls, "fill") < minFills) {
-  console.error(`expected >= ${minFills} fill() calls, got ${count(mapCalls, "fill")}`);
+if (count(mapCalls, "drawImage") === 0) {
+  console.error("drawMap never drew the deck artwork (drawImage)");
+  process.exit(1);
+}
+if (count(mapCalls, "fill") < map.pointsOfInterest.length) {
+  console.error(
+    `expected >= ${map.pointsOfInterest.length} fill() calls, got ${count(mapCalls, "fill")}`,
+  );
   process.exit(1);
 }
 if (count(mapCalls, "fillText") < map.rooms.length) {
@@ -153,7 +161,7 @@ if (polygon.length !== 360 * 2) {
 }
 
 console.log("Renderer smoke test passed ✓");
-console.log(`  map pass:    ${mapCalls.length} calls, fill=${count(mapCalls, "fill")}, arcs=${count(mapCalls, "arc")}`);
+console.log(`  map pass:    ${mapCalls.length} calls, fill=${count(mapCalls, "fill")}, drawImage=${count(mapCalls, "drawImage")}, arcs=${count(mapCalls, "arc")}`);
 console.log(
   `  actors pass: ${withActors.length} calls, arcs=${count(withActors, "arc")}, ellipse=${count(withActors, "ellipse")}`,
 );
