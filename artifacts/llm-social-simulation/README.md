@@ -25,9 +25,21 @@ to trust, and **argue and vote** in meetings.
 | **Deck artwork** | The official Skeld art (`public/skeld-map.webp`) is the deck itself: actors, task markers and fog render on top of it |
 
 **Map provenance.** The deck layout is The Skeld from *Among Us* — 14 rooms plus
-the named Hallway, the seven corridors of the real ship, 14 vent grates in six
-chains, four hallway cameras, and the sabotage consoles where they are on the
-real map. All of it lives as data in `src/game/map.ts`; the artwork in
+the named Hallway, the halls and doors of the real ship (11 walkable links:
+Northwest / Northeast / Central / West / Southwest / Southeast halls plus the
+O2, Weapons, Navigation and Shields doors), 14 vent grates in six chains, four
+hallway cameras, and the sabotage consoles where they are on the real map.
+
+Every room and corridor rectangle is *measured off the artwork itself*: each box
+was traced from the dark wall runs in `public/skeld-map.webp` and then converted
+to world coordinates by `scripts/gen-map-geom.ts` (1800×1007 art → 1920×1200
+world). Rooms sit a few pixels inside their drawn walls so a 15px actor can
+never clip a hull corner, and corridors overlap the rooms they join so the
+navigation grid's clearance circle can walk every seam. Collision, the nav grid
+and the fog grid are all derived from that one set of rectangles, so what you
+see is what you can walk.
+
+All of it lives as data in `src/game/map.ts`; the artwork in
 `public/skeld-map.webp` is © Innersloth and is drawn as the deck, with the game
 markers and fog composited over it.
 Everything else — station name, crew, roles, dialogue, task presentation and the

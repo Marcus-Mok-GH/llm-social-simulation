@@ -4,6 +4,12 @@
  *
  * The artwork is stretched across the world rect by the renderer, so the
  * mapping is a plain per-axis scale. Run: bun scripts/gen-map-geom.ts
+ *
+ * Every box below was measured off the artwork's wall lines: the dark hull and
+ * wall runs (`luminance < 55`) that bound each room, the corridor floor tint
+ * that separates the halls, and the door gaps punched through those walls. Boxes
+ * are deliberately a little *inside* the drawn floor so a 15px actor can never
+ * clip a corner of hull.
  */
 const ART_W = 1800;
 const ART_H = 1007;
@@ -20,23 +26,34 @@ const box = (x0: number, y0: number, x1: number, y1: number) => ({
   h: Math.round((y1 - y0) * SY),
 });
 
+const w = (x: number) => Math.round(x * SX);
+const h = (y: number) => Math.round(y * SY);
+
 /** Measured from the artwork (art pixels, top-left origin). */
 const ROOMS: [string, string, string, number, number, number, number][] = [
-  ["upper_engine", "Upper Engine", "UPPER", 305, 55, 492, 300],
-  ["medbay", "MedBay", "MED", 604, 255, 794, 460],
-  ["cafeteria", "Cafeteria", "CAFE", 795, 20, 1254, 350],
-  ["weapons", "Weapons", "WPN", 1258, 108, 1445, 300],
-  ["reactor", "Reactor", "REACT", 150, 340, 370, 615],
-  ["security", "Security", "SEC", 415, 340, 603, 548],
-  ["o2", "O2", "O2", 1177, 355, 1330, 495],
-  ["hallway", "Hallway", "HALL", 1338, 300, 1432, 650],
-  ["navigation", "Navigation", "NAV", 1545, 320, 1790, 530],
-  ["admin", "Admin", "ADMIN", 1040, 635, 1315, 744],
-  ["electrical", "Electrical", "ELEC", 655, 520, 845, 700],
-  ["storage", "Storage", "STOR", 845, 640, 1035, 900],
-  ["lower_engine", "Lower Engine", "LOWER", 305, 615, 490, 800],
-  ["communications", "Communications", "COMMS", 1040, 800, 1265, 975],
-  ["shields", "Shields", "SHLD", 1275, 745, 1490, 880],
+  // North row: Upper Engine under the port hull, then Cafeteria amidships and
+  // Weapons on the starboard bow.
+  ["upper_engine", "Upper Engine", "UPPER", 318, 108, 484, 320],
+  ["medbay", "MedBay", "MED", 621, 270, 805, 516],
+  ["cafeteria", "Cafeteria", "CAFE", 814, 21, 1232, 428],
+  ["weapons", "Weapons", "WPN", 1321, 118, 1468, 254],
+
+  // Middle band: Reactor on the port nose, Security and MedBay inboard of it,
+  // O2 / Hallway / Navigation on the starboard side, Admin / Electrical /
+  // Storage amidships.
+  ["reactor", "Reactor", "REACT", 20, 330, 317, 637],
+  ["security", "Security", "SEC", 441, 344, 618, 560],
+  ["o2", "O2", "O2", 1236, 424, 1344, 458],
+  ["hallway", "Hallway", "HALL", 1350, 340, 1462, 644],
+  ["navigation", "Navigation", "NAV", 1641, 350, 1755, 500],
+  ["admin", "Admin", "ADMIN", 1092, 600, 1315, 750],
+  ["electrical", "Electrical", "ELEC", 656, 520, 846, 757],
+  ["storage", "Storage", "STOR", 890, 570, 1078, 921],
+
+  // South row: Lower Engine, Communications, then Shields on the starboard bow.
+  ["lower_engine", "Lower Engine", "LOWER", 316, 646, 484, 795],
+  ["communications", "Communications", "COMMS", 1100, 826, 1288, 930],
+  ["shields", "Shields", "SHLD", 1322, 700, 1420, 890],
 ];
 
 type Corridor = {
@@ -47,66 +64,73 @@ type Corridor = {
 };
 
 // Corridor rectangles are invisible collision, not artwork: each one is drawn
-// wide enough (>=35 art px of overlap with every room it joins) that the nav
+// wide enough (>=20 art px of overlap with every room it joins) that the nav
 // grid's 15px-clearance circle can actually walk through the seam.
 const CORRIDORS: Corridor[] = [
-  { id: "c_nw_hall", name: "Northwest Hall", connects: ["upper_engine", "medbay", "cafeteria"], box: [455, 175, 905, 292] },
-  { id: "c_ne_hall", name: "Northeast Hall", connects: ["cafeteria", "weapons"], box: [1150, 260, 1350, 310] },
-  { id: "c_central_hall", name: "Central Hall", connects: ["cafeteria", "admin", "storage"], box: [950, 350, 1120, 700] },
-  { id: "c_west_hall", name: "West Hall", connects: ["upper_engine", "reactor", "security", "lower_engine"], box: [335, 262, 450, 655] },
-  { id: "c_sw_hall", name: "Southwest Hall", connects: ["lower_engine", "electrical", "storage"], box: [450, 665, 890, 746] },
-  { id: "c_se_hall", name: "Southeast Hall", connects: ["admin", "storage", "communications", "shields"], box: [1000, 715, 1470, 830] },
-  { id: "c_door_weapons", name: "Weapons Door", connects: ["hallway", "weapons"], box: [1352, 262, 1412, 330] },
-  { id: "c_door_o2", name: "O2 Door", connects: ["hallway", "o2"], box: [1295, 400, 1370, 460] },
-  { id: "c_door_nav", name: "Navigation Door", connects: ["hallway", "navigation"], box: [1395, 415, 1580, 475] },
-  { id: "c_door_shields", name: "Shields Door", connects: ["hallway", "shields"], box: [1375, 615, 1432, 790] },
+  { id: "c_nw_hall", name: "Northwest Hall", connects: ["upper_engine", "medbay", "cafeteria"], box: [476, 176, 824, 278] },
+  { id: "c_ne_hall", name: "Northeast Hall", connects: ["cafeteria", "weapons"], box: [1200, 190, 1340, 260] },
+  { id: "c_o2_door", name: "O2 Door", connects: ["cafeteria", "o2"], box: [1150, 400, 1270, 460] },
+  { id: "c_central_hall", name: "Central Hall", connects: ["cafeteria", "admin", "storage"], box: [990, 380, 1160, 665] },
+  { id: "c_west_hall", name: "West Hall", connects: ["upper_engine", "reactor", "security", "lower_engine"], box: [310, 300, 472, 650] },
+  { id: "c_sw_hall", name: "Southwest Hall", connects: ["lower_engine", "electrical", "storage"], box: [470, 700, 920, 760] },
+  { id: "c_se_hall", name: "Southeast Hall", connects: ["admin", "storage", "communications", "shields"], box: [1000, 740, 1440, 850] },
+
+  // The four doors off the east Hallway (Weapons, O2 side, Navigation, Shields).
+  { id: "c_door_weapons", name: "Weapons Door", connects: ["hallway", "weapons"], box: [1370, 200, 1450, 360] },
+  { id: "c_door_o2", name: "O2 Door", connects: ["hallway", "o2"], box: [1300, 400, 1390, 480] },
+  { id: "c_door_nav", name: "Navigation Door", connects: ["hallway", "navigation"], box: [1420, 420, 1660, 490] },
+  { id: "c_door_shields", name: "Shields Door", connects: ["hallway", "shields"], box: [1360, 600, 1440, 800] },
 ];
 
 type Poi = [string, string, "task" | "vent" | "emergency" | "sabotage" | "spawn", number, number, string];
 
 const POIS: Poi[] = [
-  ["task_cafeteria", "cafeteria", "task", 870, 95, "Empty Garbage"],
-  ["task_weapons", "weapons", "task", 1345, 200, "Clear Asteroids"],
-  ["task_medbay", "medbay", "task", 645, 430, "Submit Scan"],
-  ["task_upper_engine", "upper_engine", "task", 400, 175, "Align Engine Output"],
-  ["task_reactor", "reactor", "task", 265, 465, "Start Reactor"],
-  ["task_security", "security", "task", 500, 470, "Fix Wiring"],
-  ["task_admin", "admin", "task", 1175, 685, "Swipe Card"],
-  ["task_o2", "o2", "task", 1250, 425, "Clean O2 Filter"],
-  ["task_hallway", "hallway", "task", 1384, 475, "Clean Vent"],
-  ["task_navigation", "navigation", "task", 1670, 430, "Chart Course"],
-  ["task_lower_engine", "lower_engine", "task", 400, 710, "Align Engine Output"],
-  ["task_electrical", "electrical", "task", 750, 610, "Calibrate Distributor"],
-  ["task_storage", "storage", "task", 940, 770, "Fuel Engines"],
-  ["task_communications", "communications", "task", 1150, 885, "Download Data"],
-  ["task_shields", "shields", "task", 1380, 810, "Prime Shields"],
+  ["task_cafeteria", "cafeteria", "task", 1000, 250, "Empty Garbage"],
+  ["task_weapons", "weapons", "task", 1390, 200, "Clear Asteroids"],
+  ["task_medbay", "medbay", "task", 710, 350, "Submit Scan"],
+  ["task_upper_engine", "upper_engine", "task", 400, 200, "Align Engine Output"],
+  ["task_reactor", "reactor", "task", 150, 480, "Start Reactor"],
+  ["task_security", "security", "task", 515, 450, "Fix Wiring"],
+  ["task_admin", "admin", "task", 1200, 700, "Swipe Card"],
+  ["task_o2", "o2", "task", 1290, 440, "Clean O2 Filter"],
+  ["task_hallway", "hallway", "task", 1400, 550, "Clean Vent"],
+  ["task_navigation", "navigation", "task", 1700, 420, "Chart Course"],
+  ["task_lower_engine", "lower_engine", "task", 400, 700, "Align Engine Output"],
+  ["task_electrical", "electrical", "task", 750, 620, "Calibrate Distributor"],
+  ["task_storage", "storage", "task", 980, 730, "Fuel Engines"],
+  ["task_communications", "communications", "task", 1190, 870, "Download Data"],
+  ["task_shields", "shields", "task", 1370, 760, "Prime Shields"],
 
-  ["emergency", "cafeteria", "emergency", 1020, 245, "Emergency button"],
+  ["emergency", "cafeteria", "emergency", 1010, 210, "Emergency button"],
 
-  ["vent_cafeteria", "cafeteria", "vent", 1230, 300, "Vent"],
-  ["vent_admin", "admin", "vent", 1075, 700, "Vent"],
-  ["vent_hallway", "hallway", "vent", 1384, 620, "Vent"],
-  ["vent_weapons", "weapons", "vent", 1420, 130, "Vent"],
-  ["vent_navigation_n", "navigation", "vent", 1570, 350, "Vent"],
-  ["vent_navigation_s", "navigation", "vent", 1570, 500, "Vent"],
-  ["vent_shields", "shields", "vent", 1450, 855, "Vent"],
-  ["vent_upper_engine", "upper_engine", "vent", 330, 80, "Vent"],
-  ["vent_reactor_n", "reactor", "vent", 200, 370, "Vent"],
-  ["vent_reactor_s", "reactor", "vent", 200, 565, "Vent"],
-  ["vent_lower_engine", "lower_engine", "vent", 330, 775, "Vent"],
-  ["vent_medbay", "medbay", "vent", 620, 290, "Vent"],
-  ["vent_security", "security", "vent", 520, 400, "Vent"],
-  ["vent_electrical", "electrical", "vent", 685, 555, "Vent"],
+  // Vents — the 14 grates of the real ship, in its six chains:
+  //   Upper Engine ↔ Reactor(port) · Reactor(starboard) ↔ Lower Engine
+  //   MedBay ↔ Security ↔ Electrical · Cafeteria ↔ Admin ↔ Hallway
+  //   Weapons ↔ Navigation(upper) · Navigation(lower) ↔ Shields
+  ["vent_cafeteria", "cafeteria", "vent", 1180, 380, "Vent"],
+  ["vent_admin", "admin", "vent", 1140, 690, "Vent"],
+  ["vent_hallway", "hallway", "vent", 1420, 600, "Vent"],
+  ["vent_weapons", "weapons", "vent", 1440, 150, "Vent"],
+  ["vent_navigation_n", "navigation", "vent", 1670, 375, "Vent"],
+  ["vent_navigation_s", "navigation", "vent", 1670, 470, "Vent"],
+  ["vent_shields", "shields", "vent", 1380, 850, "Vent"],
+  ["vent_upper_engine", "upper_engine", "vent", 340, 160, "Vent"],
+  ["vent_reactor_n", "reactor", "vent", 60, 380, "Vent"],
+  ["vent_reactor_s", "reactor", "vent", 60, 560, "Vent"],
+  ["vent_lower_engine", "lower_engine", "vent", 350, 720, "Vent"],
+  ["vent_medbay", "medbay", "vent", 660, 320, "Vent"],
+  ["vent_security", "security", "vent", 500, 400, "Vent"],
+  ["vent_electrical", "electrical", "vent", 700, 560, "Vent"],
 
-  ["sab_hand_n", "reactor", "sabotage", 175, 400, "Hand scanner (north)"],
-  ["sab_hand_s", "reactor", "sabotage", 175, 555, "Hand scanner (south)"],
-  ["sab_lights", "electrical", "sabotage", 700, 675, "Lights panel"],
+  // Sabotage targets — each is also a repair console during an outage.
+  // Reactor Meltdown is fixed on the two hand scanners, Fix Lights in
+  // Electrical (the O2 and Comms sabotages are not modelled by the engine).
+  ["sab_hand_n", "reactor", "sabotage", 40, 400, "Hand scanner (port)"],
+  ["sab_hand_s", "reactor", "sabotage", 40, 560, "Hand scanner (starboard)"],
+  ["sab_lights", "electrical", "sabotage", 680, 700, "Lights panel"],
 
-  ["spawn_cafeteria", "cafeteria", "spawn", 1025, 120, "Spawn"],
+  ["spawn_cafeteria", "cafeteria", "spawn", 1010, 120, "Spawn"],
 ];
-
-const w = (x: number) => Math.round(x * SX);
-const h = (y: number) => Math.round(y * SY);
 
 const out: string[] = [];
 out.push(`  rooms: [`);

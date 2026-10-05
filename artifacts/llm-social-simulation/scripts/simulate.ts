@@ -64,12 +64,27 @@ function drivePlayer(engine: GameEngine): void {
     return;
   }
   const task = me.tasks.find((t) => !t.done);
-  if (!task) {
+
+  // Ordinary player moves the task list doesn't cover: report a body you are
+  // standing next to, and — as an impostor who hasn't met yet — detour to the
+  // beacon once to cover a kill. Both keep the meeting pipeline firing in the
+  // headless run instead of leaving it to a crewmate stumbling on a body.
+  if (engine.report()) {
     for (const k of MOVE) engine.setKey(k, false);
     return;
   }
-  const poi = engine.map.pointsOfInterest.find((p) => p.id === task.poiId);
-  if (!poi) return;
+  const beacon = engine.map.pointsOfInterest.find((p) => p.kind === "emergency");
+  const coveringKill =
+    !!beacon && me.role.includes("imp") && engine.meetingsHeld === 0 && engine.time > 20;
+
+  if (!task && !coveringKill) {
+    for (const k of MOVE) engine.setKey(k, false);
+    return;
+  }
+  const poi = task
+    ? engine.map.pointsOfInterest.find((p) => p.id === task.poiId)
+    : undefined;
+  if (!coveringKill && !poi) return;
 
   let st = driverState.get(engine);
   if (!st) {
@@ -87,17 +102,27 @@ function drivePlayer(engine: GameEngine): void {
     driverState.set(engine, st);
   }
 
-  const dist = Math.hypot(poi.x - me.entity.x, poi.y - me.entity.y);
+  // Ordinary player moves the task list doesn't cover: report a body you are
+  // standing next to, and — as an impostor who hasn't met yet — detour to the
+  // beacon once to cover a kill. Both keep the meeting pipeline firing in the
+  // headless run instead of leaving it to a crewmate stumbling on a body.
+  const goal = coveringKill ? beacon! : poi!;
+
+  const dist = Math.hypot(goal.x - me.entity.x, goal.y - me.entity.y);
   if (dist < INTERACT_DIST) {
     for (const k of MOVE) engine.setKey(k, false);
+    if (coveringKill) {
+      engine.interact();
+      return;
+    }
     engine.interact();
     return;
   }
 
   const repath = (): void => {
-    st!.path = findPath(st!.grid, { x: me.entity.x, y: me.entity.y }, { x: poi.x, y: poi.y }) ?? [];
+    st!.path = findPath(st!.grid, { x: me.entity.x, y: me.entity.y }, { x: goal.x, y: goal.y }) ?? [];
     st!.wp = 0;
-    st!.target = task.poiId;
+    st!.target = coveringKill ? "beacon" : task.poiId;
     st!.stuck = 0;
     st!.repath = REPATH_COOLDOWN;
   };
@@ -105,7 +130,7 @@ function drivePlayer(engine: GameEngine): void {
   // Re-path immediately on a new console; otherwise when we ran out of
   // waypoints or hit the stuck watchdog (throttled so a failure to path
   // doesn't burn an A* search every frame).
-  if (st.target !== task.poiId) repath();
+  if (st.target !== (coveringKill ? "beacon" : task.poiId)) repath();
   else st.repath = Math.max(0, st.repath - 1 / 60);
 
   const moved = Math.hypot(me.entity.x - st.lastX, me.entity.y - st.lastY);
@@ -119,8 +144,8 @@ function drivePlayer(engine: GameEngine): void {
   }
 
   // Steer toward the next waypoint, consuming the ones we've reached.
-  let tx = poi.x;
-  let ty = poi.y;
+  let tx = goal.x;
+  let ty = goal.y;
   while (st.wp < st.path.length) {
     const w = st.path[st.wp];
     if (Math.hypot(w.x - me.entity.x, w.y - me.entity.y) < WAYPOINT_EPS) st.wp++;
