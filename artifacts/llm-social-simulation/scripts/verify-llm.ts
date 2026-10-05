@@ -95,8 +95,29 @@ function view(role: "crew" | "imposter"): WorldView {
       { key: "crew:2", name: "JUNO", roomId: "infirmary", roomName: "Infirmary", zoneId: "infirmary", zoneName: "Infirmary", alive: true, visible: false, isolation: 90, allied: false },
       { key: "imp:1", name: "VEX", roomId: "hold", roomName: "Hold", zoneId: "hold", zoneName: "Hold", alive: true, visible: false, isolation: 300, allied: role === "imposter" },
     ],
-    recent: ["[sighted] Saw VEGA in Mess Hall not long ago."],
+    history: [
+      "[00:40 sighted] Saw VEGA in Mess Hall not long ago.",
+      "[01:20 task] Watched JUNO work a console in Infirmary.",
+    ],
     suspicions: [{ name: "VEGA", score: 0.4 }],
+    your_goal:
+      role === "imposter" ? 'Fake work at "Reset breaker" in Power Bay (alibi)' : 'Work "Store rations" in Mess Hall',
+    goal_since: "02:10",
+    last_reasoning: role === "imposter" ? "build an alibi" : "next unfinished task",
+    last_action: "Moving to Mess Hall",
+    last_move: "Mess Hall",
+    decision_history: [
+      { at: "01:10", goal: 'Work "Store rations" in Mess Hall', action: "Moving to Mess Hall for \"Store rations\"", reasoning: "next unfinished task" },
+      { at: "02:40", goal: 'Work "Store rations" in Mess Hall', action: "Moving to Mess Hall for \"Store rations\"", reasoning: "still the nearest console" },
+    ],
+    meeting_history: [
+      {
+        at: "01:30",
+        reason: "SHADE reported a body",
+        lines: ["SHADE: I found a body in Infirmary.", "VEGA: I was on tasks the whole time."],
+        ejected: null,
+      },
+    ],
     sabotage: null,
     cooldowns: { kill: role === "imposter" ? 0 : 99, sabotage: role === "imposter" ? 0 : 99 },
     bodyOutstanding: false,

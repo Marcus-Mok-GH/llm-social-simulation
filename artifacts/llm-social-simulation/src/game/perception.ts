@@ -1,10 +1,13 @@
 /**
  * Perception, memory and the belief model.
  *
- * Every agent owns a `Mind`: a capped ring of memory entries plus a suspicion
- * vector over the other actors. Nothing here knows about roles — the engine
- * decides *what* an agent observes (gated by line of sight) and this module
- * decides what that does to what they believe.
+ * Every agent owns a `Mind`: a complete, append-only record of everything it
+ * observed, said, decided and attended over the whole match, plus a suspicion
+ * vector over the other actors. Nothing is ever evicted while the match runs,
+ * so an agent can reason about the opening seconds as clearly as the last.
+ * Nothing here knows about roles — the engine decides *what* an agent observes
+ * (gated by line of sight) and this module decides what that does to what they
+ * believe.
  *
  * Suspicion is the single number that later drives both meeting dialogue and
  * the vote, which is what makes the social layer consistent: an agent that says
@@ -45,6 +48,32 @@ export interface SeenAt {
   y: number;
 }
 
+/**
+ * A meeting this agent personally attended, kept so it can reason about what
+ * was said after the meeting ends. Without this the discussion is unknowable
+ * to the decision layer the moment the meeting closes.
+ */
+export interface MeetingMemory {
+  t: number;
+  /** Why the meeting happened, e.g. "SHADE reported a body". */
+  reason: string;
+  /** Every line spoken, as "Name: text", oldest first. */
+  lines: string[];
+  /** Who was voted out, if anyone. */
+  ejected: { key: string; name: string; role: Role } | null;
+}
+
+/** One decision the agent made, kept for the whole match. */
+export interface DecisionEntry {
+  t: number;
+  /** The goal the agent committed to with this decision. */
+  goal: string;
+  /** One-line summary of what it did. */
+  action: string;
+  /** Why it chose it, in its own words (null on the heuristic fallback). */
+  reasoning: string | null;
+}
+
 export interface Mind {
   key: string;
   role: Role;
@@ -53,6 +82,10 @@ export interface Mind {
   /** targetKey -> 0..1. */
   suspicion: Record<string, number>;
   lastSeen: Record<string, SeenAt>;
+  /**
+   * Every notable event this agent observed, oldest first. Append-only for the
+   * whole match — nothing is ever evicted, so no early event is ever forgotten.
+   */
   memories: MemoryEntry[];
   /** Body ids already taken into account (no double-counting). */
   bodiesSeen: Set<number>;
@@ -62,9 +95,24 @@ export interface Mind {
   hasReported: boolean;
   /** Vote cast during the current meeting. */
   vote: string | null;
+
+  // --- persistent self-context, carried between decision ticks -----------
+  /** The durable purpose this agent is pursuing right now, or null. */
+  goal: string | null;
+  /** Simulation time the current goal was adopted. */
+  goalSince: number;
+  /** Why the agent chose its most recent action, in its own words. */
+  lastReasoning: string | null;
+  /** One-line summary of the agent's most recent action. */
+  lastAction: string | null;
+  /** Human-readable name of the zone the agent last set out for. */
+  lastMove: string | null;
+  /** Every meeting this agent attended, oldest first (append-only). */
+  meetings: MeetingMemory[];
+  /** Every decision this agent made, oldest first (append-only). */
+  journal: DecisionEntry[];
 }
 
-const MEMORY_CAP = 40;
 const BASELINE = 0.05;
 
 export function createMind(key: string, role: Role, allies: string[] = []): Mind {
@@ -79,12 +127,56 @@ export function createMind(key: string, role: Role, allies: string[] = []): Mind
     ventsSeen: new Set(),
     hasReported: false,
     vote: null,
+    goal: null,
+    goalSince: 0,
+    lastReasoning: null,
+    lastAction: null,
+    lastMove: null,
+    meetings: [],
+    journal: [],
   };
 }
 
+/**
+ * Record the agent's purpose and reasoning for this decision so the *next*
+ * prompt can show the agent what it was doing and why, and append the decision
+ * to its match-long journal. The `goalSince` clock is only reset when the goal
+ * itself changes, so an agent can tell how long it has been committed to a plan.
+ */
+export function setGoal(
+  mind: Mind,
+  goal: string,
+  t: number,
+  reasoning?: string | null,
+  action?: string | null,
+): void {
+  if (mind.goal !== goal) {
+    mind.goal = goal;
+    mind.goalSince = t;
+  }
+  if (reasoning) mind.lastReasoning = reasoning;
+  if (action) mind.lastAction = action;
+  mind.journal.push({
+    t,
+    goal,
+    action: action ?? mind.lastAction ?? goal,
+    reasoning: reasoning ?? null,
+  });
+}
+
+export function clearGoal(mind: Mind): void {
+  mind.goal = null;
+  mind.goalSince = 0;
+}
+
+/** Bank a finished meeting for the whole match (append-only). */
+export function rememberMeeting(mind: Mind, entry: MeetingMemory): void {
+  mind.meetings.push(entry);
+}
+
+/** Bank a notable observation for the whole match (append-only). */
 export function remember(mind: Mind, entry: MemoryEntry): void {
   mind.memories.push(entry);
-  if (mind.memories.length > MEMORY_CAP) mind.memories.shift();
 }
 
 /** Bounded add so a single event can never make suspicion saturate. */

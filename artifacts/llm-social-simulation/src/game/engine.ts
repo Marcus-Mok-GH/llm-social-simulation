@@ -83,8 +83,11 @@ import {
   noteSighting,
   rankSuspects,
   remember,
+  rememberMeeting,
+  setGoal,
   topSuspect,
   type Mind,
+  type Role,
 } from "./perception";
 import { createPlayer, updatePlayer, type Player } from "./player";
 import { makeRng, type Rng } from "./rng";
@@ -212,6 +215,8 @@ interface MeetingState {
   ejectedRole: "crew" | "imposter" | null;
   playerLine: string | null;
   spoken: Set<string>;
+  /** Index into `messages` where this meeting's transcript begins. */
+  msgStart: number;
 }
 
 export interface SpeakerView {
@@ -647,6 +652,19 @@ export class GameEngine {
         if (!this.visible(obs, tgt.entity.x, tgt.entity.y)) continue;
 
         const room = roomAt(this.map, tgt.entity.x, tgt.entity.y);
+        // Remember where everyone went for the whole match: log a sighting only
+        // the first time this agent places a target in a new room, so the full
+        // movement history survives without a per-0.1s flood of duplicates.
+        const prevSeen = obs.mind.lastSeen[tgt.key];
+        if (!prevSeen || prevSeen.roomId !== room.id) {
+          remember(obs.mind, {
+            t,
+            kind: "sighted",
+            actorKey: tgt.key,
+            roomId: room.id,
+            text: `Saw ${tgt.name} in ${room.name}.`,
+          });
+        }
         noteSighting(obs.mind, tgt.key, room.id, tgt.entity.x, tgt.entity.y, t);
 
         // Watching someone climb into a vent is the strongest possible tell.
@@ -1060,9 +1078,17 @@ export class GameEngine {
         };
       });
 
-    const recent = a.mind.memories
-      .slice(-6)
-      .map((m) => `[${m.kind}] ${m.text}`);
+    // The whole match log, not a tail: every event this agent has observed,
+    // timestamped, so it can reason from the opening seconds onward.
+    const history = a.mind.memories.map(
+      (m) => `[${formatClock(m.t)} ${m.kind}] ${m.text}`,
+    );
+    const decisionHistory = a.mind.journal.map((d) => ({
+      at: formatClock(d.t),
+      goal: d.goal,
+      action: d.action,
+      reasoning: d.reasoning,
+    }));
 
     const fixPoiId = this.sabotage?.fixPoiIds[0] ?? "";
     const fixPoi = this.map.pointsOfInterest.find((p) => p.id === fixPoiId);
@@ -1096,10 +1122,24 @@ export class GameEngine {
       interactables: this.buildInteractables(a, zone),
       system_message: feedback,
       others,
-      recent,
+      history,
+      decision_history: decisionHistory,
       suspicions: rankSuspects(a.mind, 0)
         .slice(0, 5)
         .map((s) => ({ name: this.names[s.key] ?? s.key, score: s.score })),
+      // Persistent self-context, so the agent reasons between iterations
+      // instead of waking up amnesiac every decision tick.
+      your_goal: a.mind.goal,
+      goal_since: a.mind.goal ? formatClock(a.mind.goalSince) : null,
+      last_reasoning: a.mind.lastReasoning,
+      last_action: a.mind.lastAction,
+      last_move: a.mind.lastMove,
+      meeting_history: a.mind.meetings.map((mm) => ({
+        at: formatClock(mm.t),
+        reason: mm.reason,
+        lines: mm.lines,
+        ejected: mm.ejected ? `${mm.ejected.name} (${mm.ejected.role})` : null,
+      })),
       sabotage: this.sabotage && fixPoi
         ? {
             kind: this.sabotage.kind,
@@ -1233,6 +1273,18 @@ export class GameEngine {
    */
   private applyIntent(a: Actor, intent: Intent): void {
     if (intent.action === "INTERACT") {
+      const verb =
+        intent.interaction_type === "TASK"
+          ? "Work a console"
+          : intent.interaction_type === "KILL"
+            ? "Kill a target"
+            : intent.interaction_type === "FIX"
+              ? "Fix the sabotage"
+              : intent.interaction_type === "REPORT"
+                ? "Report a body"
+                : "Call an emergency meeting";
+      const here = this.zones.zones[a.zoneId]?.name ?? a.zoneId;
+      this.recordDecision(a, `${verb} in ${here}`, `${verb} (${intent.target})`, intent.reasoning);
       const failure = this.executeInteraction(a, intent);
       // A failed action never happens; instead the reason is attached to the
       // agent and delivered as `system_message` on its next decision.
@@ -1241,7 +1293,10 @@ export class GameEngine {
     }
 
     if (intent.action === "SABOTAGE") {
-      if (a.role === "imposter") this.triggerSabotage();
+      if (a.role === "imposter") {
+        this.recordDecision(a, "Sabotage the station to split the crew", "Triggered a sabotage", intent.reasoning);
+        this.triggerSabotage();
+      }
       return;
     }
 
@@ -1254,12 +1309,16 @@ export class GameEngine {
           ? intent.target
           : null;
       const vent = requested ?? nearestPoi(this.map, "vent", imp.x, imp.y)?.id ?? null;
-      if (vent) imposterSeekVent(imp, this.map, this.grid, vent);
+      if (vent) {
+        this.recordDecision(a, "Slip into a vent to travel unseen", "Headed for a vent", intent.reasoning);
+        imposterSeekVent(imp, this.map, this.grid, vent);
+      }
       return;
     }
 
     const zone = zoneByRef(this.zones, intent.target);
     if (!zone) return;
+    a.mind.lastMove = zone.name;
 
     if (a.kind === "crew") {
       const c = a.entity as Crewmate;
@@ -1273,6 +1332,12 @@ export class GameEngine {
             zoneAtPoint(this.zones, this.map, p.x, p.y).id === zone.id,
         );
         if (fix) {
+          this.recordDecision(
+            a,
+            `Repair the ${this.sabotage.kind} in ${zone.name}`,
+            `Moving to ${zone.name} to repair the sabotage`,
+            intent.reasoning,
+          );
           crewmateGotoPoi(c, this.map, this.grid, fix.id);
           return;
         }
@@ -1283,9 +1348,17 @@ export class GameEngine {
         a.tasks.some((t) => t.poiId === id && !t.done),
       );
       if (owed) {
+        const label = a.tasks.find((t) => t.poiId === owed)?.label ?? owed;
+        this.recordDecision(
+          a,
+          `Work "${label}" in ${zone.name}`,
+          `Moving to ${zone.name} for "${label}"`,
+          intent.reasoning,
+        );
         crewmateGotoPoi(c, this.map, this.grid, owed);
         return;
       }
+      this.recordDecision(a, `Move to ${zone.name}`, `Moving to ${zone.name}`, intent.reasoning);
       const pt = standPoint(this.map, zone);
       crewmateGotoPoint(c, this.grid, pt.x, pt.y);
       return;
@@ -1299,22 +1372,58 @@ export class GameEngine {
       (o) => o.kind === "crew" && o.alive && o.zoneId === zone.id,
     );
     if (prey) {
+      this.recordDecision(
+        a,
+        `Stalk ${prey.name} in ${zone.name}`,
+        `Stalking ${prey.name}`,
+        intent.reasoning,
+      );
       imposterStalk(imp, this.grid, this.crewmates, (prey.entity as Crewmate).id);
       return;
     }
     // The human player is not a Crewmate, so walk at their position directly.
     const human = this.playerActor;
     if (human.alive && human.role === "crew" && human.zoneId === zone.id) {
+      this.recordDecision(
+        a,
+        `Close on the player in ${zone.name}`,
+        "Chasing the player",
+        intent.reasoning,
+      );
       imposterGotoPoint(imp, this.grid, human.entity.x, human.entity.y);
       return;
     }
     // Otherwise stand at a console in the zone for cover, or just walk there.
     if (zone.taskPoiIds.length > 0) {
+      const label =
+        this.map.pointsOfInterest.find((p) => p.id === zone.taskPoiIds[0])?.label ??
+        zone.taskPoiIds[0];
+      this.recordDecision(
+        a,
+        `Fake work at "${label}" in ${zone.name} (alibi)`,
+        `Heading to fake a task in ${zone.name}`,
+        intent.reasoning,
+      );
       imposterFakeTask(imp, this.map, this.grid, zone.taskPoiIds[0]);
       return;
     }
+    this.recordDecision(a, `Move to ${zone.name}`, `Moving to ${zone.name}`, intent.reasoning);
     const pt = standPoint(this.map, zone);
     imposterGotoPoint(imp, this.grid, pt.x, pt.y);
+  }
+
+  /**
+   * Persist what the agent just decided and why, so its next prompt shows the
+   * same context back to it: the goal it is committed to, the action it took
+   * and the reasoning behind it.
+   */
+  private recordDecision(
+    a: Actor,
+    goal: string,
+    action: string,
+    reasoning?: string,
+  ): void {
+    setGoal(a.mind, goal, this.time, reasoning ?? null, action);
   }
 
   // -- interaction validation ----------------------------------------------
@@ -1463,6 +1572,7 @@ export class GameEngine {
       ejectedRole: null,
       playerLine: null,
       spoken: new Set(),
+      msgStart: this.messages.length,
     };
 
     let i = 0;
@@ -1745,6 +1855,9 @@ export class GameEngine {
 
   private finishMeeting(): void {
     const m = this.meeting;
+    // Bank the meeting as a per-agent memory *before* the state is torn down,
+    // so every agent can recall what was said and decided afterwards.
+    if (m) this.recordMeetingMemory(m);
     this.meeting = null;
     this.bodies = [];
     for (const a of this.actors) {
@@ -1760,7 +1873,34 @@ export class GameEngine {
       for (const a of this.living()) a.killCooldown = Math.max(a.killCooldown, 6);
     }
     this.system("Meeting adjourned — back to work.");
-    void m;
+  }
+
+  /**
+   * Turn the finished meeting into a complete recap for every agent. The lines
+   * are the meeting's whole transcript, and the reason/ejection are the engine's
+   * own verdicts, so later reasoning is grounded in what really happened rather
+   * than in whatever an agent imagined.
+   */
+  private recordMeetingMemory(m: MeetingState): void {
+    const byName = this.names[m.reason.byKey] ?? m.reason.byKey;
+    const reason =
+      m.reason.kind === "emergency"
+        ? `${byName} called an emergency meeting`
+        : `${byName} reported a body`;
+    const lines = this.messages
+      .slice(m.msgStart)
+      .map((c) => `${c.speakerName}: ${c.text}`);
+    const ejected = m.ejected
+      ? {
+          key: m.ejected,
+          name: this.names[m.ejected] ?? m.ejected,
+          role: (m.ejectedRole ?? "crew") as Role,
+        }
+      : null;
+
+    for (const a of this.actors) {
+      rememberMeeting(a.mind, { t: this.time, reason, lines, ejected });
+    }
   }
 
   // -- win conditions ------------------------------------------------------

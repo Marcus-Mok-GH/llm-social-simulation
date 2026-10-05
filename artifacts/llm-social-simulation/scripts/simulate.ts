@@ -86,10 +86,13 @@ function runMatch(label: string, playerIsImposter: boolean, seed: number): Outco
 
   const kills = engine.messages.filter((m) => m.text.includes("was killed")).length;
   const snap = engine.snapshot();
+  const maxMem = Math.max(...engine.actors.map((a) => a.mind.memories.length));
+  const maxJournal = Math.max(...engine.actors.map((a) => a.mind.journal.length));
   console.log(
     `\n[${label}] phase=${engine.phase} winner=${engine.winner} t=${engine.time.toFixed(0)}s ` +
       `meetings=${snap.meetings} ejects=${snap.ejects} kills=${kills} ` +
-      `tasks=${engine.taskComplete}/${engine.taskTotal} frames=${frames}`,
+      `tasks=${engine.taskComplete}/${engine.taskTotal} frames=${frames} ` +
+      `longest-log: ${maxMem} events / ${maxJournal} decisions`,
   );
 
   return { engine, kills };
@@ -154,6 +157,46 @@ function audit({ engine, kills }: Outcome, label: string): void {
       }
     }
   }
+
+  // 8. Agents keep context between decisions: a goal, their reasoning, and a
+  //    recap of the meetings they attended.
+  const meetingMinds = engine.actors.filter((a) => a.mind.meetings.length > 0);
+  check(meetingMinds.length > 0, `${label}: at least one agent remembers a meeting`);
+  const recap = meetingMinds[0]?.mind.meetings.slice(-1)[0];
+  check(
+    recap !== undefined && recap.lines.length > 0,
+    `${label}: the meeting recap contains the discussion`,
+  );
+  check(
+    engine.snapshot().ejects === 0 ||
+      meetingMinds.some((a) => a.mind.meetings.some((mm) => mm.ejected !== null)),
+    `${label}: an ejection is recorded in meeting memory`,
+  );
+  check(
+    meetingMinds.every((a) =>
+      a.mind.meetings.every((mm) => !mm.lines.some((l) => l.startsWith("…and"))),
+    ),
+    `${label}: meeting recaps are complete (no truncated transcripts)`,
+  );
+  check(
+    engine.actors.some((a) => a.mind.goal !== null && a.mind.lastAction !== null),
+    `${label}: at least one agent carries a goal between ticks`,
+  );
+  check(
+    engine.actors.some((a) => a.mind.lastReasoning !== null),
+    `${label}: at least one agent carries its reasoning between ticks`,
+  );
+  check(
+    engine.actors.some((a) => a.mind.memories.some((m) => m.kind === "sighted")),
+    `${label}: agents remember where everyone moved over the match`,
+  );
+  const earliest = Math.min(
+    ...engine.actors.map((a) => a.mind.memories[0]?.t ?? Infinity),
+  );
+  check(
+    earliest === 0 || engine.time - earliest > 30,
+    `${label}: the earliest remembered event is still present near the end`,
+  );
 }
 
 console.log("=== Match A: player is crew ===");

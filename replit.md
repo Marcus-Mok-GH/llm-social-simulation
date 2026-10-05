@@ -39,7 +39,8 @@ Environment:
   wall-clock time; `tick(dt)` is the only way the world advances.
 - `src/game/vision.ts` — line-of-sight test, visibility grid, ray-cast polygon,
   explored memory. Source of truth for "can this agent see that?".
-- `src/game/perception.ts` — agent memory ring + suspicion vector.
+- `src/game/perception.ts` — the agent's complete match log (append-only events,
+  decisions and meetings) + suspicion vector.
 - `src/ai/decision.ts` — the pluggable AI layer: node-graph serialization
   (current_location, valid_moves, visible_players, current_time) plus
   MOVE/VENT/SABOTAGE intents and meeting dialogue, with heuristic fallbacks.

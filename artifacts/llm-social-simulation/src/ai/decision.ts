@@ -117,8 +117,38 @@ export interface WorldView {
   /** The engine's verdict on the agent's last rejected action, if any. */
   system_message: string | null;
   others: ActorView[];
-  recent: string[];
+  /**
+   * Every notable event this agent has observed this match, oldest first. This
+   * is the complete match log — no event is ever dropped, so the opening of the
+   * match is as available to the agent as the last second.
+   */
+  history: string[];
   suspicions: { name: string; score: number }[];
+  /** --- Persistent self-context, carried across decision ticks --- */
+  /** The purpose the agent committed to last time it acted. */
+  your_goal: string | null;
+  /** When that goal was adopted, "MM:SS", or null. */
+  goal_since: string | null;
+  /** Why the agent chose its last action, in its own words. */
+  last_reasoning: string | null;
+  /** One-line summary of the agent's last action. */
+  last_action: string | null;
+  /** The zone the agent last set out for, if any. */
+  last_move: string | null;
+  /** Every decision this agent has made this match, oldest first. */
+  decision_history: {
+    at: string;
+    goal: string;
+    action: string;
+    reasoning: string | null;
+  }[];
+  /** Every meeting this agent attended this match, oldest first. */
+  meeting_history: {
+    at: string;
+    reason: string;
+    lines: string[];
+    ejected: string | null;
+  }[];
   sabotage: { kind: string; secondsLeft: number; fixPoiId: string; fixRoomId: RoomId } | null;
   cooldowns: { kill: number; sabotage: number };
   bodyOutstanding: boolean;
@@ -141,13 +171,15 @@ export type InteractIntent = {
   action: "INTERACT";
   target: string;
   interaction_type: InteractionType;
+  /** Why the agent chose this, carried forward so it can reason between ticks. */
+  reasoning?: string;
 };
 
 export type Intent =
-  | { action: "MOVE"; target: string }
+  | { action: "MOVE"; target: string; reasoning?: string }
   | InteractIntent
-  | { action: "VENT"; target?: string }
-  | { action: "SABOTAGE" };
+  | { action: "VENT"; target?: string; reasoning?: string }
+  | { action: "SABOTAGE"; reasoning?: string };
 
 const INTENT_ACTIONS = ["MOVE", "INTERACT", "VENT", "SABOTAGE"] as const;
 type IntentAction = (typeof INTENT_ACTIONS)[number];
@@ -172,6 +204,11 @@ function systemPrompt(view: WorldView): string {
     "(rooms joined by corridors). You pick a destination zone; the station walks you there.",
     "You act on objects and people with INTERACT. A referee verifies every action and, if it",
     "is rejected, tells you why in system_message on your next turn so you can correct it.",
+    "You keep a memory between turns: your current goal, why you chose your last action, and",
+    "a recap of every meeting. Nothing is forgotten: your_history holds every event you have",
+    "observed this match, your_decisions holds every decision you have made, and your_goal /",
+    "last_action / last_reasoning carry the current thread. Stay consistent with your goal; if",
+    "you change your mind, say so in reasoning and commit to the new goal.",
     INTENT_SCHEMA,
   ];
 
@@ -206,7 +243,14 @@ function summarise(view: WorldView): Record<string, unknown> {
     yourTasks: view.tasks,
     others: view.others,
     suspicion: view.suspicions,
-    recentMemory: view.recent,
+    your_history: view.history,
+    your_decisions: view.decision_history,
+    your_goal: view.your_goal,
+    goal_since: view.goal_since,
+    last_action: view.last_action,
+    last_reasoning: view.last_reasoning,
+    last_move: view.last_move,
+    meeting_history: view.meeting_history,
     sabotage: view.sabotage,
     cooldowns: view.cooldowns,
     bodyOutstanding: view.bodyOutstanding,
@@ -231,12 +275,16 @@ function validateIntent(raw: unknown, view: WorldView): Intent | null {
   const action = obj.action;
   if (typeof action !== "string") return null;
   const target = typeof obj.target === "string" ? obj.target : undefined;
+  // The reasoning is optional free text; it is stored so the agent's next
+  // prompt can show it what it was thinking, not rejected if malformed.
+  const reasoning =
+    typeof obj.reasoning === "string" ? obj.reasoning.trim().slice(0, 160) : undefined;
 
   switch (action.toUpperCase() as IntentAction) {
     case "MOVE": {
       if (!target) return null;
       const zone = resolveZone(view, target);
-      return zone ? { action: "MOVE", target: zone.id } : null;
+      return zone ? { action: "MOVE", target: zone.id, reasoning } : null;
     }
     case "INTERACT": {
       if (!target || typeof obj.interaction_type !== "string") return null;
@@ -244,12 +292,12 @@ function validateIntent(raw: unknown, view: WorldView): Intent | null {
       if (!INTERACTION_TYPES.includes(itype)) return null;
       // Only the shape is validated here; the engine is the referee for
       // distance, game state and line of sight (PLAN.md step 3).
-      return { action: "INTERACT", target, interaction_type: itype };
+      return { action: "INTERACT", target, interaction_type: itype, reasoning };
     }
     case "VENT":
-      return view.self.role === "imposter" ? { action: "VENT", target } : null;
+      return view.self.role === "imposter" ? { action: "VENT", target, reasoning } : null;
     case "SABOTAGE":
-      return view.self.role === "imposter" ? { action: "SABOTAGE" } : null;
+      return view.self.role === "imposter" ? { action: "SABOTAGE", reasoning } : null;
     default:
       return null;
   }
@@ -276,57 +324,104 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
   if (view.self.role === "imposter") {
     // A validated kill beats any movement — pounce on an isolated target.
     const kill = ready("KILL");
-    if (kill) return { action: "INTERACT", target: kill.id, interaction_type: "KILL" };
+    if (kill)
+      return {
+        action: "INTERACT",
+        target: kill.id,
+        interaction_type: "KILL",
+        reasoning: "isolated target in range",
+      };
 
     if (!view.sabotage && view.cooldowns.sabotage <= 0 && rand() < 0.4) {
-      return { action: "SABOTAGE" };
+      return { action: "SABOTAGE", reasoning: "split the crew up" };
     }
 
     if (view.cooldowns.kill <= 0) {
       const prey = view.others.filter((o) => o.alive && !o.allied);
       const visible = prey.filter((o) => o.visible).sort((a, b) => b.isolation - a.isolation);
-      if (visible.length > 0 && rand() < 0.8) return { action: "MOVE", target: visible[0].zoneId };
+      if (visible.length > 0 && rand() < 0.8)
+        return { action: "MOVE", target: visible[0].zoneId, reasoning: "prey is visible and alone" };
       const isolated = [...prey].sort((a, b) => b.isolation - a.isolation);
-      if (isolated.length > 0 && rand() < 0.7) return { action: "MOVE", target: isolated[0].zoneId };
+      if (isolated.length > 0 && rand() < 0.7)
+        return {
+          action: "MOVE",
+          target: isolated[0].zoneId,
+          reasoning: "close on the most isolated crewmate",
+        };
       if (view.vents.length > 0 && rand() < 0.35) {
-        return { action: "VENT", target: pickFrom(view.vents) ?? undefined };
+        return {
+          action: "VENT",
+          target: pickFrom(view.vents) ?? undefined,
+          reasoning: "reposition unseen",
+        };
       }
-      return { action: "MOVE", target: pickZone() };
+      return { action: "MOVE", target: pickZone(), reasoning: "hunt while the kill is ready" };
     }
 
     // Cooling down: keep the alibi warm.
     if (rand() < 0.5) {
       const console = pickFrom(view.consoles);
-      return { action: "MOVE", target: console ? console.roomId : pickZone() };
+      return {
+        action: "MOVE",
+        target: console ? console.roomId : pickZone(),
+        reasoning: "build an alibi while the kill recharges",
+      };
     }
     if (view.vents.length > 0 && rand() < 0.35) {
-      return { action: "VENT", target: pickFrom(view.vents) ?? undefined };
+      return {
+        action: "VENT",
+        target: pickFrom(view.vents) ?? undefined,
+        reasoning: "reposition unseen",
+      };
     }
-    return { action: "MOVE", target: pickValid() };
+    return { action: "MOVE", target: pickValid(), reasoning: "reposition quietly" };
   }
 
   // Crew: fix a live hazard first, then act on whatever they are standing at.
   const fix = ready("FIX");
-  if (fix) return { action: "INTERACT", target: fix.id, interaction_type: "FIX" };
+  if (fix)
+    return {
+      action: "INTERACT",
+      target: fix.id,
+      interaction_type: "FIX",
+      reasoning: "the hazard needs fixing now",
+    };
   if (view.sabotage && rand() < 0.75) {
-    return { action: "MOVE", target: view.sabotage.fixRoomId };
+    return { action: "MOVE", target: view.sabotage.fixRoomId, reasoning: "head to the repair panel" };
   }
+
   const task = ready("TASK");
-  if (task) return { action: "INTERACT", target: task.id, interaction_type: "TASK" };
+  if (task)
+    return {
+      action: "INTERACT",
+      target: task.id,
+      interaction_type: "TASK",
+      reasoning: "console is in range",
+    };
   const report = ready("REPORT");
-  if (report) return { action: "INTERACT", target: report.id, interaction_type: "REPORT" };
+  if (report)
+    return {
+      action: "INTERACT",
+      target: report.id,
+      interaction_type: "REPORT",
+      reasoning: "a body needs reporting",
+    };
 
   const open = view.tasks.filter((t) => !t.done);
   if (open.length > 0) {
     const next = pickFrom(open);
-    if (next) return { action: "MOVE", target: next.roomId };
+    if (next) return { action: "MOVE", target: next.roomId, reasoning: "next unfinished task" };
   }
   if (view.bodyOutstanding && rand() < 0.5) {
     const visible = view.others.filter((o) => o.alive && o.visible);
     const witness = pickFrom(visible);
-    return { action: "MOVE", target: witness ? witness.zoneId : pickValid() };
+    return {
+      action: "MOVE",
+      target: witness ? witness.zoneId : pickValid(),
+      reasoning: "regroup after a body",
+    };
   }
-  return { action: "MOVE", target: pickZone() };
+  return { action: "MOVE", target: pickZone(), reasoning: "patrol for tasks or information" };
 }
 
 // ---------------------------------------------------------------------------
@@ -424,6 +519,14 @@ export async function statementWithModel(
     bodiesFound: input.bodiesFound,
     ejectedSoFar: input.ejectedSoFar.map((k) => nameOf(names, k)),
     lastThingHumanSaid: input.playerLine,
+    yourGoal: mind.goal,
+    // The complete meeting record, not a tail: every line from every meeting.
+    meetingHistory: mind.meetings.map((m) => ({
+      at: m.t,
+      reason: m.reason,
+      lines: m.lines,
+      ejected: m.ejected ? m.ejected.name : null,
+    })),
     instruction:
       "Your vote will be calculated from your suspicion scores separately — only produce the spoken line and who you accuse.",
   };

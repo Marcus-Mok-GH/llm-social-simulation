@@ -110,15 +110,21 @@ export function heuristicStatement(
   return { line: alibis[idx], accuse: null };
 }
 
-/** Short self-description used in the LLM system prompt. */
+/**
+ * Self-description used in the LLM system prompt. By default the agent's whole
+ * match-long memory is included — nothing is dropped, so a meeting statement
+ * can cite anything the agent has seen since the round began. Pass `limit` to
+ * bound it when a caller only needs the tail.
+ */
 export function memoryDigest(
   map: GameMap,
   mind: Mind,
   names: NameIndex,
-  limit = 8,
+  limit?: number,
 ): string[] {
+  const items = limit === undefined ? mind.memories : mind.memories.slice(-limit);
   const out: string[] = [];
-  for (const m of mind.memories.slice(-limit)) {
+  for (const m of items) {
     const line = memoryToLine(map, m, { key: "x", name: "You" }, names);
     if (line) out.push(`[${m.kind}] ${line}`);
   }

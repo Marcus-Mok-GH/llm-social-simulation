@@ -10,6 +10,7 @@
  * Run: bun scripts/validate-interactions.ts
  */
 import { GameEngine, INTERACT_RANGE, KILL_RANGE, KILL_COOLDOWN } from "../src/game/engine";
+import { remember } from "../src/game/perception";
 import type { Interactable, Intent } from "../src/ai/decision";
 
 let failures = 0;
@@ -29,7 +30,17 @@ function check(cond: boolean, msg: string): void {
  */
 interface EngineInternals {
   applyIntent(actor: unknown, intent: Intent): void;
-  buildView(actor: unknown): { interactables: Interactable[]; system_message: string | null };
+  buildView(actor: unknown): {
+    interactables: Interactable[];
+    system_message: string | null;
+    zones: { id: string; name: string }[];
+    your_goal: string | null;
+    last_reasoning: string | null;
+    last_action: string | null;
+    last_move: string | null;
+    history: string[];
+    decision_history: { at: string; goal: string; action: string; reasoning: string | null }[];
+  };
 }
 
 const engine = new GameEngine({ playerIsImposter: false, seed: 5, llm: false });
@@ -126,7 +137,67 @@ check(
   `a crewmate cannot kill ("${crew.actionFeedback}")`,
 );
 
-// --- 7. Sanity: the tuning constants the messages describe are the live ones -----------------
+// --- 7. Decisions carry a goal and reasoning between iterations ------------------------------
+const zone0 = internals.buildView(crew).zones[0];
+internals.applyIntent(crew, { action: "MOVE", target: zone0.id, reasoning: "verify continuity" });
+check(crew.mind.lastReasoning === "verify continuity", "reasoning is stored for the next turn");
+check(
+  crew.mind.goal !== null && crew.mind.goal.includes(zone0.name),
+  `a durable goal is recorded ("${crew.mind.goal}")`,
+);
+check(crew.mind.lastMove === zone0.name, "the last destination zone is remembered");
+const continuity = internals.buildView(crew);
+check(continuity.your_goal === crew.mind.goal, "buildView feeds the goal back to the agent");
+check(
+  continuity.last_reasoning === "verify continuity",
+  "buildView feeds the reasoning back to the agent",
+);
+check(continuity.last_move === zone0.name, "buildView feeds the last move back to the agent");
+
+// --- 8. Memory is append-only for the whole match (nothing is evicted) -----------------------
+const roomId = engine.map.rooms[0].id;
+const before = crew.mind.memories.length;
+for (let i = 0; i < 120; i++) {
+  remember(crew.mind, {
+    t: i,
+    kind: "sighted",
+    actorKey: "crew:1",
+    roomId,
+    text: `event ${i}`,
+  });
+}
+check(
+  crew.mind.memories.length === before + 120,
+  "memory keeps every event it observes (no eviction)",
+);
+const fullHistory = internals.buildView(crew).history;
+check(
+  fullHistory.length === crew.mind.memories.length,
+  "buildView serializes the complete match memory",
+);
+check(fullHistory.some((l) => l.includes("event 0")), "the very first event is still remembered");
+check(fullHistory.some((l) => l.includes("event 119")), "the most recent event is remembered");
+
+const decisionsBefore = crew.mind.journal.length;
+const firstReasoning = crew.mind.journal[0]?.reasoning ?? null;
+for (let i = 0; i < 60; i++) {
+  internals.applyIntent(crew, { action: "MOVE", target: zone0.id, reasoning: `loop ${i}` });
+}
+const decisionsView = internals.buildView(crew);
+check(
+  crew.mind.journal.length === decisionsBefore + 60,
+  "the decision journal keeps every decision (no eviction)",
+);
+check(
+  decisionsView.decision_history.length === crew.mind.journal.length,
+  "buildView serializes the whole decision journal",
+);
+check(
+  decisionsView.decision_history[0]?.reasoning === firstReasoning,
+  "the earliest decision is still remembered at the end of the match",
+);
+
+// --- 9. Sanity: the tuning constants the messages describe are the live ones -----------------
 check(INTERACT_RANGE > 0 && KILL_RANGE > 0 && KILL_COOLDOWN > 0, "interaction constants are positive");
 
 if (failures > 0) {
