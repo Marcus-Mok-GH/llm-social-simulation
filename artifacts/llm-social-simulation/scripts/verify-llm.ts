@@ -86,6 +86,10 @@ function view(role: "crew" | "imposter"): WorldView {
       { poiId: "task_power", label: "Reset breaker", roomId: "power_bay", roomName: "Power Bay" },
     ],
     vents: ["vent_mess", "vent_med", "vent_power"],
+    interactables: [
+      { id: "task_mess", type: "TASK", name: "Store rations", status: "incomplete", in_range: true },
+    ],
+    system_message: null,
     others: [
       { key: "crew:1", name: "VEGA", roomId: "mess_hall", roomName: "Mess Hall", zoneId: "mess_hall", zoneName: "Mess Hall", alive: true, visible: true, isolation: 420, allied: false },
       { key: "crew:2", name: "JUNO", roomId: "infirmary", roomName: "Infirmary", zoneId: "infirmary", zoneName: "Infirmary", alive: true, visible: false, isolation: 90, allied: false },

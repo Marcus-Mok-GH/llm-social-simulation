@@ -20,6 +20,8 @@ import {
   statementWithModel,
   type AiContext,
   type Intent,
+  type InteractIntent,
+  type Interactable,
   type WorldView,
 } from "../ai/decision";
 import {
@@ -39,6 +41,7 @@ import {
   crewmateGotoPoint,
   crewmateGotoPoi,
   crewmateHalt,
+  crewmateWorkAt,
   updateCrewmate,
   type Crewmate,
 } from "./crewmate";
@@ -185,10 +188,16 @@ export interface Actor {
   nextDecisionAt: number;
   decisionSeq: number;
   pendingDecision: boolean;
+  /** Earliest time the agent may be nudged to decide because it can act here. */
+  urgencyAt: number;
+  /** Engine verdict on the agent's last rejected interaction, fed back next turn. */
+  actionFeedback: string | null;
   /** Body this agent intends to report, if any. */
   bodyToReport: number | null;
   repathAt: number;
   killCooldown: number;
+  /** Time until which this agent counts as actively repairing a sabotage. */
+  fixUntil: number;
   speakAt: number;
   voteAt: number;
 }
@@ -403,9 +412,12 @@ export class GameEngine {
         nextDecisionAt: 0,
         decisionSeq: 0,
         pendingDecision: false,
+        urgencyAt: 0,
+        actionFeedback: null,
         bodyToReport: null,
         repathAt: 0,
         killCooldown: 0,
+        fixUntil: 0,
         speakAt: 0,
         voteAt: 0,
       },
@@ -504,9 +516,12 @@ export class GameEngine {
       nextDecisionAt: 1 + this.rng.range(0, 4),
       decisionSeq: 0,
       pendingDecision: false,
+      urgencyAt: 0,
+      actionFeedback: null,
       bodyToReport: null,
       repathAt: 0,
       killCooldown: role === "imposter" ? 34 : 0,
+      fixUntil: 0,
       speakAt: 0,
       voteAt: 0,
     };
@@ -802,15 +817,6 @@ export class GameEngine {
     return this.kill(me, target);
   }
 
-  private aiKillChecks(): void {
-    for (const killer of this.actors) {
-      if (!killer.alive || killer.isPlayer || killer.role !== "imposter") continue;
-      if (killer.killCooldown > 0) continue;
-      const target = this.killTargetFor(killer);
-      if (target) this.kill(killer, target);
-    }
-  }
-
   // -- sabotage ------------------------------------------------------------
 
   triggerSabotage(kind?: SabotageKind): boolean {
@@ -853,6 +859,9 @@ export class GameEngine {
     for (const a of fixables) {
       if (a.isPlayer) {
         if (!this.keys.has("e")) continue;
+      } else if (a.fixUntil <= this.time) {
+        // An AI only repairs after it has chosen and validated a FIX interaction.
+        continue;
       }
       const near = this.sabotage.fixPoiIds.some((id) => {
         const poi = this.map.pointsOfInterest.find((p) => p.id === id);
@@ -915,9 +924,104 @@ export class GameEngine {
     this.taskTotal = Math.max(this.taskComplete, this.taskComplete + remaining);
   }
 
+  /** True when `a` is physically close enough to touch something at (x, y). */
+  private inInteractRange(a: Actor, x: number, y: number): boolean {
+    return a.alive && Math.hypot(x - a.entity.x, y - a.entity.y) <= INTERACT_RANGE;
+  }
+
+  /**
+   * Serialize what the agent can touch from its current node (PLAN.md step 1):
+   * its own consoles, live repair points, nearby bodies, the emergency beacon
+   * and — for a traitor — any crewmate it could strike. Advertised ids are
+   * re-resolved and re-checked by `executeInteraction`, so a hallucinated id or
+   * a stale entry is refused rather than trusted.
+   */
+  private buildInteractables(a: Actor, zone: Zone): Interactable[] {
+    const out: Interactable[] = [];
+    const sees = (x: number, y: number): boolean =>
+      a.alive &&
+      Math.hypot(x - a.entity.x, y - a.entity.y) <= INTERACT_RANGE &&
+      this.los(a.entity.x, a.entity.y, x, y);
+    const here = (x: number, y: number): boolean =>
+      zoneAtPoint(this.zones, this.map, x, y).id === zone.id;
+
+    if (a.role === "crew") {
+      for (const t of a.tasks) {
+        if (t.done) continue;
+        const poi = this.map.pointsOfInterest.find((p) => p.id === t.poiId);
+        if (!poi || (!here(poi.x, poi.y) && !sees(poi.x, poi.y))) continue;
+        out.push({
+          id: poi.id,
+          type: "TASK",
+          name: t.label,
+          status: "incomplete",
+          in_range: sees(poi.x, poi.y),
+        });
+      }
+      if (this.sabotage) {
+        for (const id of this.sabotage.fixPoiIds) {
+          const poi = this.map.pointsOfInterest.find((p) => p.id === id);
+          if (!poi || (!here(poi.x, poi.y) && !sees(poi.x, poi.y))) continue;
+          out.push({
+            id: poi.id,
+            type: "FIX",
+            name: poi.label,
+            status: "active",
+            in_range: sees(poi.x, poi.y),
+          });
+        }
+      }
+    } else if (a.role === "imposter") {
+      const killable = a.killCooldown <= 0 ? this.killTargetFor(a) : null;
+      for (const o of this.actors) {
+        if (o === a || !o.alive || o.role !== "crew") continue;
+        if (!here(o.entity.x, o.entity.y) && !sees(o.entity.x, o.entity.y)) continue;
+        out.push({
+          id: o.key,
+          type: "KILL",
+          name: o.name,
+          status: "alive",
+          in_range: killable?.key === o.key,
+        });
+      }
+    }
+
+    // Reporting is available to anyone who can see a corpse.
+    for (const b of this.bodies) {
+      if (!here(b.x, b.y) && !sees(b.x, b.y)) continue;
+      out.push({
+        id: String(b.id),
+        type: "REPORT",
+        name: `${b.name}'s body`,
+        status: "unreported",
+        in_range: sees(b.x, b.y),
+      });
+    }
+
+    const beacon = this.map.pointsOfInterest.find((p) => p.kind === "emergency");
+    if (beacon && (here(beacon.x, beacon.y) || sees(beacon.x, beacon.y))) {
+      out.push({
+        id: beacon.id,
+        type: "EMERGENCY",
+        name: "Emergency beacon",
+        status:
+          this.emergencyCooldown > 0
+            ? `recharging ${Math.ceil(this.emergencyCooldown)}s`
+            : "ready",
+        in_range: sees(beacon.x, beacon.y) && this.emergencyCooldown <= 0,
+      });
+    }
+
+    return out;
+  }
+
   private buildView(a: Actor): WorldView {
     const selfRoom = roomAt(this.map, a.entity.x, a.entity.y);
     const zone = zoneAtPoint(this.zones, this.map, a.entity.x, a.entity.y);
+    // The feedback is consumed exactly once, so it reaches the agent's next
+    // prompt (PLAN.md step 4) and is never repeated after that.
+    const feedback = a.actionFeedback;
+    a.actionFeedback = null;
     const neighborIds = new Set(zoneNeighbors(this.zones, zone.id).map((z) => z.id));
     const ref = (z: Zone) => ({
       id: z.id,
@@ -989,6 +1093,8 @@ export class GameEngine {
       })),
       consoles,
       vents: this.map.pointsOfInterest.filter((p) => p.kind === "vent").map((p) => p.id),
+      interactables: this.buildInteractables(a, zone),
+      system_message: feedback,
       others,
       recent,
       suspicions: rankSuspects(a.mind, 0)
@@ -1008,16 +1114,72 @@ export class GameEngine {
     };
   }
 
+  /**
+   * Whether the agent can act on something *here* right now (PLAN.md step 1).
+   * When true the decision loop is nudged forward so an in-range interaction is
+   * offered promptly instead of waiting out the normal thinking interval.
+   */
+  private hasUrgentInteraction(a: Actor): boolean {
+    if (this.phase !== "playing" || !a.alive) return false;
+
+    if (a.kind === "crew") {
+      // Only an agent that has stopped somewhere offers an interaction; one
+      // mid-walk is still navigating and must not be interrupted.
+      if ((a.entity as Crewmate).state !== "idle") return false;
+      if (this.sabotage) {
+        for (const id of this.sabotage.fixPoiIds) {
+          const poi = this.map.pointsOfInterest.find((p) => p.id === id);
+          if (
+            poi &&
+            this.inInteractRange(a, poi.x, poi.y) &&
+            this.los(a.entity.x, a.entity.y, poi.x, poi.y)
+          ) {
+            return true;
+          }
+        }
+      }
+      for (const t of a.tasks) {
+        if (t.done) continue;
+        const poi = this.map.pointsOfInterest.find((p) => p.id === t.poiId);
+        if (
+          poi &&
+          this.inInteractRange(a, poi.x, poi.y) &&
+          this.los(a.entity.x, a.entity.y, poi.x, poi.y)
+        ) {
+          return true;
+        }
+      }
+      if (a.bodyToReport !== null) {
+        const body = this.bodies.find((b) => b.id === a.bodyToReport);
+        if (body && this.inInteractRange(a, body.x, body.y)) return true;
+      }
+      return false;
+    }
+
+    if (a.role === "imposter" && a.killCooldown <= 0) {
+      return this.killTargetFor(a) !== null;
+    }
+    return false;
+  }
+
   private decide(a: Actor): void {
     if (a.isPlayer || !a.alive || this.phase !== "playing") return;
     if (a.pendingDecision) return;
 
     // Chasing a body takes priority over any new plan — without this the
     // decision loop re-routes the witness mid-sprint and the corpse is never
-    // reported.
+    // reported. Once the witness is close enough to touch it, fall through so
+    // the decision layer can emit the REPORT interaction.
     if (a.bodyToReport !== null) {
-      a.nextDecisionAt = this.time + 2;
-      return;
+      const body = this.bodies.find((b) => b.id === a.bodyToReport);
+      const canReport =
+        body !== undefined &&
+        this.inInteractRange(a, body.x, body.y) &&
+        this.los(a.entity.x, a.entity.y, body.x, body.y);
+      if (!canReport) {
+        a.nextDecisionAt = this.time + 2;
+        return;
+      }
     }
 
     // Don't interrupt an agent that is mid-task: re-pathing a crewmate that is
@@ -1064,11 +1226,20 @@ export class GameEngine {
   }
 
   /**
-   * Translate the model's node-graph decision into physical movement. `MOVE`
-   * resolves a destination zone and lets A* walk the sprite to it; `VENT` and
-   * `SABOTAGE` are the traitor's engine-owned abilities.
+   * Translate the model's node-graph decision into physical movement or a
+   * validated interaction. `MOVE` resolves a destination zone and lets A* walk
+   * the sprite to it; `INTERACT` is refused or executed by the engine referee;
+   * `VENT` and `SABOTAGE` are the traitor's engine-owned abilities.
    */
   private applyIntent(a: Actor, intent: Intent): void {
+    if (intent.action === "INTERACT") {
+      const failure = this.executeInteraction(a, intent);
+      // A failed action never happens; instead the reason is attached to the
+      // agent and delivered as `system_message` on its next decision.
+      if (failure) a.actionFeedback = `Action Failed: ${failure}`;
+      return;
+    }
+
     if (intent.action === "SABOTAGE") {
       if (a.role === "imposter") this.triggerSabotage();
       return;
@@ -1092,6 +1263,20 @@ export class GameEngine {
 
     if (a.kind === "crew") {
       const c = a.entity as Crewmate;
+      // A live sabotage outranks routine work: head for the repair panel even
+      // if this room also holds a console the agent still owes.
+      if (this.sabotage) {
+        const fix = this.map.pointsOfInterest.find(
+          (p) =>
+            this.sabotage !== null &&
+            this.sabotage.fixPoiIds.includes(p.id) &&
+            zoneAtPoint(this.zones, this.map, p.x, p.y).id === zone.id,
+        );
+        if (fix) {
+          crewmateGotoPoi(c, this.map, this.grid, fix.id);
+          return;
+        }
+      }
       // Productive movement: if this zone holds a console the agent still owes
       // work at, path straight to that console so arrival starts the task.
       const owed = zone.taskPoiIds.find((id) =>
@@ -1130,6 +1315,117 @@ export class GameEngine {
     }
     const pt = standPoint(this.map, zone);
     imposterGotoPoint(imp, this.grid, pt.x, pt.y);
+  }
+
+  // -- interaction validation ----------------------------------------------
+
+  /** Stop an actor wherever it stands (used when it starts an interaction). */
+  private haltActor(a: Actor): void {
+    if (a.kind === "crew") crewmateHalt(a.entity as Crewmate);
+    else if (a.kind === "imposter") imposterHalt(a.entity as Imposter);
+  }
+
+  /** Begin a validated console task. Only ever called after the checks pass. */
+  private beginTask(a: Actor, task: TaskAssignment): void {
+    crewmateWorkAt(a.entity as Crewmate, this.map, task.poiId);
+  }
+
+  /**
+   * The referee (PLAN.md step 3). Every `INTERACT` is re-validated here against
+   * the agent's *physical* position and the current game state. It returns null
+   * and performs the effect when the action is legal, or a human-readable
+   * failure reason that the agent receives on its next turn.
+   */
+  private executeInteraction(a: Actor, intent: InteractIntent): string | null {
+    const target = intent.target;
+
+    switch (intent.interaction_type) {
+      case "KILL": {
+        if (a.role !== "imposter") return "you are not a traitor.";
+        if (a.killCooldown > 0) {
+          return `your kill cooldown is still recharging (${Math.ceil(a.killCooldown)}s).`;
+        }
+        const victim = this.actor(target);
+        if (!victim || !victim.alive) return "there is nobody there to kill.";
+        if (victim.role !== "crew") return `you cannot target ${victim.name}.`;
+        const d = Math.hypot(victim.entity.x - a.entity.x, victim.entity.y - a.entity.y);
+        if (d > KILL_RANGE) {
+          return `you are too far away from ${victim.name} (${Math.round(d)}u away).`;
+        }
+        if (!this.los(a.entity.x, a.entity.y, victim.entity.x, victim.entity.y)) {
+          return `something is blocking your line of sight to ${victim.name}.`;
+        }
+        if (this.witnesses(a, victim).length > 0) {
+          return `${victim.name} is not alone — someone would see you.`;
+        }
+        return this.kill(a, victim) ? null : "the kill did not land.";
+      }
+
+      case "TASK": {
+        if (a.role !== "crew") return "you have no tasks to work.";
+        const task = a.tasks.find((t) => t.poiId === target && !t.done);
+        if (!task) return `'${target}' is not one of your unfinished tasks.`;
+        const poi = this.map.pointsOfInterest.find((p) => p.id === target);
+        if (!poi) return `there is nothing called '${target}' here.`;
+        if (!this.inInteractRange(a, poi.x, poi.y)) return `you are too far away from '${task.label}'.`;
+        if (!this.los(a.entity.x, a.entity.y, poi.x, poi.y)) {
+          return `something is blocking your line of sight to '${task.label}'.`;
+        }
+        this.beginTask(a, task);
+        return null;
+      }
+
+      case "FIX": {
+        if (a.role !== "crew") return "you cannot repair the sabotage.";
+        if (!this.sabotage) return "there is nothing to repair.";
+        if (!this.sabotage.fixPoiIds.includes(target)) {
+          return `'${target}' is not a live repair point.`;
+        }
+        const poi = this.map.pointsOfInterest.find((p) => p.id === target);
+        if (!poi) return `there is nothing called '${target}' here.`;
+        if (!this.inInteractRange(a, poi.x, poi.y)) {
+          return "you are too far away from the repair console.";
+        }
+        if (!this.los(a.entity.x, a.entity.y, poi.x, poi.y)) {
+          return "something is blocking your line of sight to the repair console.";
+        }
+        a.fixUntil = this.time + REPAIR_TIME + 2;
+        this.haltActor(a);
+        return null;
+      }
+
+      case "REPORT": {
+        const body = this.bodies.find((b) => String(b.id) === target);
+        if (!body) return "there is no body to report.";
+        if (!this.inInteractRange(a, body.x, body.y)) {
+          return `you are too far away from ${body.name}'s body.`;
+        }
+        if (!this.los(a.entity.x, a.entity.y, body.x, body.y)) {
+          return `something is blocking your line of sight to ${body.name}'s body.`;
+        }
+        this.startMeeting({ kind: "report", byKey: a.key });
+        return null;
+      }
+
+      case "EMERGENCY": {
+        if (this.emergencyCooldown > 0) {
+          return `the emergency beacon is still recharging (${Math.ceil(this.emergencyCooldown)}s).`;
+        }
+        const beacon = this.map.pointsOfInterest.find((p) => p.kind === "emergency");
+        if (!beacon) return "there is no emergency beacon here.";
+        if (!this.inInteractRange(a, beacon.x, beacon.y)) {
+          return "you are too far away from the emergency beacon.";
+        }
+        if (!this.los(a.entity.x, a.entity.y, beacon.x, beacon.y)) {
+          return "something is blocking your line of sight to the emergency beacon.";
+        }
+        this.startMeeting({ kind: "emergency", byKey: a.key });
+        return null;
+      }
+
+      default:
+        return `'${intent.interaction_type}' is not something you can do.`;
+    }
   }
 
   // -- reporting -----------------------------------------------------------
@@ -1213,8 +1509,11 @@ export class GameEngine {
       }
       const d = Math.hypot(body.x - a.entity.x, body.y - a.entity.y);
       if (d <= INTERACT_RANGE) {
-        this.startMeeting({ kind: "report", byKey: a.key });
-        return;
+        // Close enough: stop and let the decision layer emit the REPORT
+        // interaction, which the engine then validates like any other.
+        this.haltActor(a);
+        a.repathAt = this.time + 0.5;
+        continue;
       }
       if (this.time >= a.repathAt) {
         crewmateGotoPoint(a.entity as Crewmate, this.grid, body.x, body.y, true);
@@ -1652,7 +1951,19 @@ export class GameEngine {
     for (const a of this.actors) {
       if (!a.alive) continue;
       if (a.killCooldown > 0) a.killCooldown = Math.max(0, a.killCooldown - dt);
-      if (!a.isPlayer && this.time >= a.nextDecisionAt) this.decide(a);
+      if (!a.isPlayer && this.time >= a.nextDecisionAt) {
+        this.decide(a);
+      } else if (
+        !a.isPlayer &&
+        !a.pendingDecision &&
+        this.time >= a.urgencyAt &&
+        this.hasUrgentInteraction(a)
+      ) {
+        // Something actionable is in reach: decide again shortly, at most once
+        // every half second so a rejected action cannot spin the model.
+        a.urgencyAt = this.time + 0.5;
+        a.nextDecisionAt = this.time + 0.05;
+      }
       // Safety net: never let a teleport leave an actor stranded in a wall.
       if (!canStand(this.map, a.entity.x, a.entity.y, a.entity.radius)) {
         const p = nearestStandable(this.map, a.entity.x, a.entity.y, a.entity.radius);
@@ -1681,7 +1992,6 @@ export class GameEngine {
     this.syncTaskBudget();
 
     this.perceive(dt);
-    this.aiKillChecks();
     this.updateSabotage(dt);
     this.aiReportChecks();
 

@@ -13,11 +13,12 @@
     "validate:movement": "bun scripts/validate-movement.ts",
     "validate:touch": "bun scripts/validate-touch.ts",
     "validate:ai": "bun scripts/validate-ai.ts",
+    "validate:interactions": "bun scripts/validate-interactions.ts",
     "validate:imposters": "bun scripts/validate-imposters.ts",
     "validate:ui": "bun scripts/validate-ui.tsx",
     "simulate": "bun scripts/simulate.ts",
     "verify:llm": "bun scripts/verify-llm.ts",
-    "check": "pnpm run typecheck && pnpm run validate:map && pnpm run validate:movement && pnpm run validate:touch && pnpm run validate:render && pnpm run validate:ui && pnpm run validate:ai && pnpm run validate:imposters && pnpm run simulate"
+    "check": "pnpm run typecheck && pnpm run validate:map && pnpm run validate:movement && pnpm run validate:touch && pnpm run validate:render && pnpm run validate:ui && pnpm run validate:ai && pnpm run validate:interactions && pnpm run validate:imposters && pnpm run simulate"
   },
   "dependencies": {
     "clsx": "catalog:",

@@ -4,10 +4,14 @@
  * seconds and asserts they move between POIs, stop to work, never get stuck and
  * never leave the walkable area or the map bounds.
  *
+ * Under the PLAN.md interaction model the state machine no longer starts work on
+ * its own — the engine validates an `INTERACT`/`TASK` and calls `crewmateWorkAt`.
+ * This check mirrors that rule so it still exercises the walking *and* the work.
+ *
  * Run: bun scripts/validate-ai.ts
  */
 import { canStand } from "../src/game/collision";
-import { createCrewmates, updateCrewmate } from "../src/game/crewmate";
+import { createCrewmates, crewmateWorkAt, updateCrewmate } from "../src/game/crewmate";
 import { UMBRA_DECK_MAP as map } from "../src/game/map";
 import { buildNavGrid, findPath } from "../src/game/navigation";
 
@@ -56,6 +60,15 @@ for (let t = 0; t < ticks; t++) {
     const px = a.x;
     const py = a.y;
     updateCrewmate(map, grid, a, dt);
+
+    // Stand-in for the engine referee: work begins only on an explicit,
+    // in-range interaction, and only once per console.
+    if (a.state === "idle" && a.targetPoiId && !visited[a.id].has(a.targetPoiId)) {
+      const poi = map.pointsOfInterest.find((p) => p.id === a.targetPoiId);
+      if (poi && Math.hypot(poi.x - a.x, poi.y - a.y) <= 52) {
+        crewmateWorkAt(a, map, poi.id);
+      }
+    }
 
     if (!canStand(map, a.x, a.y, a.radius)) allValid = false;
     if (a.x < 0 || a.x > map.width || a.y < 0 || a.y > map.height) allValid = false;

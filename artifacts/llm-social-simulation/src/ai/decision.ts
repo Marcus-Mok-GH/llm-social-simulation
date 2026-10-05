@@ -3,15 +3,21 @@
  *
  * Three questions, two interchangeable implementations of each:
  *
- *   1. Where should I go right now?      -> `intentWithModel` / `heuristicIntent`
+ *   1. What should I do right now?      -> `intentWithModel` / `heuristicIntent`
  *   2. What should I say in the meeting? -> `statementWithModel` / `fallbackStatement`
  *   3. Who do I vote for?                -> always the belief model (see engine.ts)
  *
  * Movement is *node based* (PLAN.md): the engine serializes the agent's current
- * zone, the zones it can step into, who it can see and the clock, and the model
- * answers with a strict `{"action":"MOVE","target":"<zone>"}`. The engine then
- * runs A* to the chosen zone and animates the sprite. Task work, kills, vents
- * and sabotage stay engine-owned abilities layered on top of that movement.
+ * zone, the zones it can step into, the interactables it is standing among, who
+ * it can see and the clock, and the model answers with a strict intent. `MOVE`
+ * names a destination zone and the engine runs A* there.
+ *
+ * Object and player interactions go through `INTERACT` (PLAN.md): the model
+ * picks a target and an `interaction_type` (TASK, KILL, FIX, REPORT,
+ * EMERGENCY), and the engine acts as a referee — it checks distance, game state
+ * and line of sight before anything happens. A rejected action never executes;
+ * the failure is fed back to the agent as `system_message` on its next turn so
+ * it can correct itself. `VENT` and `SABOTAGE` remain the traitor's abilities.
  *
  * The model path asks the agent's configured provider for JSON and validates
  * it. On *any* failure — no key, timeout, rate limit, malformed JSON,
@@ -61,6 +67,23 @@ export interface TaskRef {
   roomName: string;
 }
 
+/**
+ * What the agent can do to something it is standing next to. The engine never
+ * trusts this blindly — it re-checks distance, state and line of sight.
+ */
+export type InteractionType = "TASK" | "KILL" | "FIX" | "REPORT" | "EMERGENCY";
+
+/** An object or actor in the agent's current node (PLAN.md step 1). */
+export interface Interactable {
+  /** Id the engine resolves: a POI id, an actor key, or a body id. */
+  id: string;
+  type: InteractionType;
+  name: string;
+  status: string;
+  /** True only when the agent is physically able to act on it right now. */
+  in_range: boolean;
+}
+
 export interface WorldView {
   self: {
     key: string;
@@ -89,6 +112,10 @@ export interface WorldView {
   /** Every task console, so imposters can fake one. */
   consoles: TaskRef[];
   vents: string[];
+  /** Everything the agent can interact with from where it currently stands. */
+  interactables: Interactable[];
+  /** The engine's verdict on the agent's last rejected action, if any. */
+  system_message: string | null;
   others: ActorView[];
   recent: string[];
   suspicions: { name: string; score: number }[];
@@ -104,17 +131,27 @@ export interface WorldView {
 
 /**
  * The model's whole vocabulary. `MOVE` is the movement primitive (target is a
- * zone id or name); `VENT` and `SABOTAGE` are the traitor's engine-owned
- * abilities. Working a console and killing are resolved by proximity in the
- * engine, never chosen by the model.
+ * zone id or name); `INTERACT` is the interaction primitive (PLAN.md step 2),
+ * carrying a target id and an interaction type; `VENT` and `SABOTAGE` are the
+ * traitor's engine-owned abilities. Working a console, killing, repairing,
+ * reporting and the emergency beacon are all chosen by the agent and validated
+ * by the engine — never resolved by proximity alone.
  */
+export type InteractIntent = {
+  action: "INTERACT";
+  target: string;
+  interaction_type: InteractionType;
+};
+
 export type Intent =
   | { action: "MOVE"; target: string }
+  | InteractIntent
   | { action: "VENT"; target?: string }
   | { action: "SABOTAGE" };
 
-const INTENT_ACTIONS = ["MOVE", "VENT", "SABOTAGE"] as const;
+const INTENT_ACTIONS = ["MOVE", "INTERACT", "VENT", "SABOTAGE"] as const;
 type IntentAction = (typeof INTENT_ACTIONS)[number];
+const INTERACTION_TYPES: InteractionType[] = ["TASK", "KILL", "FIX", "REPORT", "EMERGENCY"];
 
 // ---------------------------------------------------------------------------
 // Prompt
@@ -122,8 +159,9 @@ type IntentAction = (typeof INTENT_ACTIONS)[number];
 
 const INTENT_SCHEMA = [
   "Reply with ONLY a JSON object:",
-  '{"action":"<one of ' + INTENT_ACTIONS.join("|") + '>","target":"<zone name>","reasoning":"<=12 words"}',
+  '{"action":"<one of ' + INTENT_ACTIONS.join("|") + '>","target":"<zone name or interactable id>","interaction_type":"<one of ' + INTERACTION_TYPES.join("|") + '>","reasoning":"<=12 words"}',
   'For MOVE, "target" is a zone name (prefer one of your valid_moves; the station will path you there).',
+  'For INTERACT, "target" is an id from interactables and "interaction_type" says what to do; the station checks distance, game state and line of sight before it happens.',
   'For VENT, "target" is an optional vent id. SABOTAGE takes no target.',
   "Include only the fields your chosen action needs. No prose, no markdown.",
 ].join(" ");
@@ -132,6 +170,8 @@ function systemPrompt(view: WorldView): string {
   const common = [
     "You move around a space station that is described to you as a graph of zones",
     "(rooms joined by corridors). You pick a destination zone; the station walks you there.",
+    "You act on objects and people with INTERACT. A referee verifies every action and, if it",
+    "is rejected, tells you why in system_message on your next turn so you can correct it.",
     INTENT_SCHEMA,
   ];
 
@@ -172,6 +212,8 @@ function summarise(view: WorldView): Record<string, unknown> {
     bodyOutstanding: view.bodyOutstanding,
     taskProgress: Number(view.taskProgress.toFixed(2)),
     vents: view.vents,
+    interactables: view.interactables,
+    system_message: view.system_message,
   };
 }
 
@@ -195,6 +237,14 @@ function validateIntent(raw: unknown, view: WorldView): Intent | null {
       if (!target) return null;
       const zone = resolveZone(view, target);
       return zone ? { action: "MOVE", target: zone.id } : null;
+    }
+    case "INTERACT": {
+      if (!target || typeof obj.interaction_type !== "string") return null;
+      const itype = obj.interaction_type.toUpperCase() as InteractionType;
+      if (!INTERACTION_TYPES.includes(itype)) return null;
+      // Only the shape is validated here; the engine is the referee for
+      // distance, game state and line of sight (PLAN.md step 3).
+      return { action: "INTERACT", target, interaction_type: itype };
     }
     case "VENT":
       return view.self.role === "imposter" ? { action: "VENT", target } : null;
@@ -220,8 +270,14 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
     return (room ?? view.valid_moves[0] ?? view.zones[0]).id;
   };
   const pickValid = (): string => (pickFrom(view.valid_moves) ?? view.zones[0])?.id ?? view.self.zoneId;
+  const ready = (type: InteractionType): Interactable | null =>
+    view.interactables.find((i) => i.type === type && i.in_range) ?? null;
 
   if (view.self.role === "imposter") {
+    // A validated kill beats any movement — pounce on an isolated target.
+    const kill = ready("KILL");
+    if (kill) return { action: "INTERACT", target: kill.id, interaction_type: "KILL" };
+
     if (!view.sabotage && view.cooldowns.sabotage <= 0 && rand() < 0.4) {
       return { action: "SABOTAGE" };
     }
@@ -249,14 +305,21 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
     return { action: "MOVE", target: pickValid() };
   }
 
-  // Crew: fix a live hazard first, then work their own list, then roam.
+  // Crew: fix a live hazard first, then act on whatever they are standing at.
+  const fix = ready("FIX");
+  if (fix) return { action: "INTERACT", target: fix.id, interaction_type: "FIX" };
   if (view.sabotage && rand() < 0.75) {
     return { action: "MOVE", target: view.sabotage.fixRoomId };
   }
+  const task = ready("TASK");
+  if (task) return { action: "INTERACT", target: task.id, interaction_type: "TASK" };
+  const report = ready("REPORT");
+  if (report) return { action: "INTERACT", target: report.id, interaction_type: "REPORT" };
+
   const open = view.tasks.filter((t) => !t.done);
   if (open.length > 0) {
-    const task = pickFrom(open);
-    if (task) return { action: "MOVE", target: task.roomId };
+    const next = pickFrom(open);
+    if (next) return { action: "MOVE", target: next.roomId };
   }
   if (view.bodyOutstanding && rand() < 0.5) {
     const visible = view.others.filter((o) => o.alive && o.visible);

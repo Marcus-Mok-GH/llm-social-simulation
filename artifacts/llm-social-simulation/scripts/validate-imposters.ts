@@ -8,7 +8,7 @@
  * Run: bun scripts/validate-imposters.ts
  */
 import { canStand } from "../src/game/collision";
-import { createCrewmates, updateCrewmate } from "../src/game/crewmate";
+import { createCrewmates, crewmateWorkAt, updateCrewmate } from "../src/game/crewmate";
 import { createImposters, updateImposter, type ImposterState } from "../src/game/imposter";
 import { UMBRA_DECK_MAP as map } from "../src/game/map";
 import { buildNavGrid } from "../src/game/navigation";
@@ -40,6 +40,8 @@ const ticks = 60 * 120; // 120 simulated seconds
 
 const stateTime = imps.map(() => new Map<string, number>());
 const travel = imps.map(() => 0);
+/** Stand-in for the engine referee: work starts on an explicit interaction. */
+const worked = new Set<string>();
 let allValid = true;
 let crewEverWorked = false;
 let ventJumps = 0;
@@ -49,6 +51,13 @@ let closestObserve = Infinity;
 for (let t = 0; t < ticks; t++) {
   for (const c of crew) {
     updateCrewmate(map, grid, c, dt);
+    if (c.state === "idle" && c.targetPoiId && !worked.has(`${c.id}:${c.targetPoiId}`)) {
+      const poi = map.pointsOfInterest.find((p) => p.id === c.targetPoiId);
+      if (poi && Math.hypot(poi.x - c.x, poi.y - c.y) <= 52) {
+        crewmateWorkAt(c, map, poi.id);
+        worked.add(`${c.id}:${c.targetPoiId}`);
+      }
+    }
     if (c.state === "working") crewEverWorked = true;
   }
 

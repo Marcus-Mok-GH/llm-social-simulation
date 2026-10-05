@@ -128,9 +128,17 @@ function chooseTarget(agent: Crewmate, map: GameMap, grid: NavGrid): boolean {
   return true;
 }
 
-function arrive(agent: Crewmate): void {
-  agent.state = "working";
-  agent.timer = WORK_DURATION;
+/**
+ * Reaching a waypoint stops the agent but does *not* start work. Working a
+ * console is an explicit, validated interaction (PLAN.md): the agent has to
+ * choose it, and the engine checks it is close enough before any progress is
+ * credited. The idle pause below gives the decision layer room to act.
+ */
+function settle(agent: Crewmate): void {
+  agent.state = "idle";
+  agent.timer = 2.5;
+  agent.path = [];
+  agent.pathIndex = 0;
   agent.taskProgress = 0;
 }
 
@@ -154,7 +162,7 @@ function recover(agent: Crewmate, map: GameMap, grid: NavGrid): void {
 
 function moveAlongPath(agent: Crewmate, map: GameMap, grid: NavGrid, dt: number): void {
   if (agent.pathIndex >= agent.path.length) {
-    arrive(agent);
+    settle(agent);
     return;
   }
 
@@ -165,7 +173,7 @@ function moveAlongPath(agent: Crewmate, map: GameMap, grid: NavGrid, dt: number)
 
   if (dist <= ARRIVE_EPS) {
     agent.pathIndex++;
-    if (agent.pathIndex >= agent.path.length) arrive(agent);
+    if (agent.pathIndex >= agent.path.length) settle(agent);
     return;
   }
 
@@ -230,6 +238,27 @@ export function crewmateGotoPoint(
   agent.state = "moving";
   agent.timer = 0;
   if (!keepTarget) agent.targetPoiId = null;
+  return true;
+}
+
+/**
+ * Begin working a specific console. Called by the engine only after it has
+ * validated an `INTERACT`/`TASK` intent, so the state machine never starts work
+ * on its own.
+ */
+export function crewmateWorkAt(
+  agent: Crewmate,
+  map: GameMap,
+  poiId: string,
+): boolean {
+  const poi = map.pointsOfInterest.find((p) => p.id === poiId);
+  if (!poi) return false;
+  agent.targetPoiId = poi.id;
+  agent.state = "working";
+  agent.timer = WORK_DURATION;
+  agent.taskProgress = 0;
+  agent.path = [];
+  agent.pathIndex = 0;
   return true;
 }
 
