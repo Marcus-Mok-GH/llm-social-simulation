@@ -45,34 +45,36 @@ const player = createPlayer(map);
 check(canStand(map, player.x, player.y, player.radius), "spawn position is walkable");
 const start = { x: player.x, y: player.y };
 
-// 2. Move right until blocked by the Mess Hall's right wall (x ~ 1020).
+// 2. Move right until blocked by the Cafeteria's east wall (x = 1160).
 check(run(player, { x: 1, y: 0 }, 240), "stayed walkable while moving right");
 check(player.x > start.x + 50, "player actually moved right");
-check(player.x <= 1020 - player.radius + 0.5, "right wall blocks the player (x <= 1004)");
+check(player.x <= 1160 - player.radius + 0.5, "east wall blocks the player (x <= 1146)");
 
-// 3. Move left until blocked by the Mess Hall's left wall (x = 660).
+// 3. Move left until blocked by the Cafeteria's west wall (x = 720).
+//    1.5u of slack: the clearance test samples a ring, so a player can end one
+//    sample-step short of the exact wall distance.
 check(run(player, { x: -1, y: 0 }, 600), "stayed walkable while moving left");
-check(player.x >= 660 + player.radius - 0.5, "left wall blocks the player (x >= 676)");
+check(player.x >= 720 + player.radius - 1.5, "west wall blocks the player (x >= 734)");
 
-// 4. Hard wall test: at y=150 there is no corridor, so the Mess Hall right wall
-//    must stop the player at x = 1020 - radius.
+// 4. Hard wall test: at y=80 nothing opens to the north, so the Cafeteria's
+//    east wall must stop the player at x = 1160 - radius.
 {
   const p = createPlayer(map);
-  p.x = 1000;
-  p.y = 150;
-  check(canStand(map, p.x, p.y, p.radius), "test start (1000,150) is walkable");
+  p.x = 1100;
+  p.y = 80;
+  check(canStand(map, p.x, p.y, p.radius), "test start (1100,80) is walkable");
   run(p, { x: 1, y: 0 }, 120);
-  check(p.x <= 1020 - p.radius + 0.5, "cannot cross the Mess Hall wall at y=150");
+  check(p.x <= 1160 - p.radius + 0.5, "cannot cross the Cafeteria wall at y=80");
 }
 
-// 5. Corridor traversal: from the Mess Hall, go down through the corridor to
-//    the Infirmary (x ~ 664..720) and confirm the player can pass the seam.
+// 5. Corridor traversal: from the Cafeteria, go down through the Central Hall
+//    (x ~ 760..840) and confirm the player can pass the seam.
 {
   const p = createPlayer(map);
-  p.x = 690;
-  p.y = 200;
+  p.x = 800;
+  p.y = 300;
   check(run(p, { x: 0, y: 1 }, 300), "stayed walkable while moving down into the corridor");
-  check(p.y > 560, "player entered the Infirmary through the corridor (y > 560)");
+  check(p.y > 500, "player entered the Central Hall through the corridor (y > 500)");
 }
 
 // 6. Random walk: never leaves the walkable area or world bounds.

@@ -66,7 +66,12 @@ Environment:
 - **Every model call has a validated shape and a fallback.** A timeout, a rate
   limit, malformed JSON or an unsupported action all fall through to the
   heuristic, so the game never stalls waiting for a model.
-- **Original IP throughout.** Layout concept is borrowed, names/geometry/art are not.
+- **The Skeld, credited.** The deck is The Skeld from Among Us (© Innersloth),
+  ported as data in `src/game/map.ts` — 15 locations (14 rooms + Hallway), 7
+  corridors as hubs, 14 vent grates in six chains, Reactor hand scanners and the
+  Electrical lights panel. The MAP chip overlays the official art
+  (`public/skeld-map.webp`, provenance noted in the artifact README). Station
+  name, crew, roles, dialogue and the rest of the presentation remain original.
 
 ## Product
 

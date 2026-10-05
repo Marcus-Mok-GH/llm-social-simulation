@@ -3,9 +3,10 @@
  *
  * Raw X/Y coordinates are hard for a language model to reason about, so the
  * engine divides the deck into a *node graph* of discrete zones instead:
- * every room and every corridor is a node, and a corridor links the two rooms
- * it joins. An agent is always "in" exactly one zone, and movement is asked
- * for as a destination zone ("MOVE to Infirmary") rather than a pixel target.
+ * every room and every corridor is a node, and a corridor links every room it
+ * opens onto (the Skeld's corridors are hubs — the west hall joins four rooms).
+ * An agent is always "in" exactly one zone, and movement is asked for as a
+ * destination zone ("MOVE to Electrical") rather than a pixel target.
  *
  * `navigation.ts` still owns the physical route — the zone graph only decides
  * *which* zone an agent wants and validates that the choice is connected.
@@ -81,13 +82,13 @@ export function buildZoneGraph(map: GameMap): ZoneGraph {
   }
 
   for (const c of map.corridors) {
-    const [a, b] = c.connects;
+    const [first] = c.connects;
     register({
       id: c.id,
       kind: "corridor",
-      name: `${a} ↔ ${b}`,
+      name: c.name ?? c.connects.join(" ↔ "),
       short: c.id,
-      roomId: a,
+      roomId: first,
       cx: c.x + c.w / 2,
       cy: c.y + c.h / 2,
       taskPoiIds: [],
@@ -95,13 +96,15 @@ export function buildZoneGraph(map: GameMap): ZoneGraph {
     });
   }
 
-  // A corridor is the edge between the two room nodes it joins.
+  // A corridor is the hub that joins every room node it opens onto.
   for (const c of map.corridors) {
-    const [a, b] = c.connects;
-    if (!zones[c.id] || !zones[a] || !zones[b]) continue;
-    edges[c.id].push(a, b);
-    edges[a].push(c.id);
-    edges[b].push(c.id);
+    if (!zones[c.id]) continue;
+    const joined = c.connects.filter((id) => zones[id]);
+    if (joined.length !== c.connects.length) continue;
+    for (const id of joined) {
+      edges[c.id].push(id);
+      edges[id].push(c.id);
+    }
   }
 
   return { order, zones, edges, lookup };

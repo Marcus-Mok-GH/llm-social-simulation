@@ -846,20 +846,26 @@ export class GameEngine {
       this.sabotage = {
         kind: "meltdown",
         secondsLeft: MELTDOWN_TIME,
-        fixPoiIds: ["sab_reactor", "sab_life"],
+        fixPoiIds: ["sab_hand_n", "sab_hand_s"],
         fixProgress: 0,
       };
-      this.system("SABOTAGE: reactor meltdown — repair at the reactor or life support.");
+      this.system("SABOTAGE: reactor meltdown — repair at a hand scanner in Reactor.");
     } else {
       this.sabotage = {
         kind: "blackout",
         secondsLeft: BLACKOUT_TIME,
-        fixPoiIds: ["sab_power"],
+        fixPoiIds: ["sab_lights"],
         fixProgress: 0,
       };
-      this.system("SABOTAGE: grid overload — lights are down, repair at the power bay.");
+      this.system("SABOTAGE: lights out — repair the panel in Electrical.");
     }
     this.sabotageCooldown = SABOTAGE_COOLDOWN;
+    // Station-wide alarm: every crewmate reconsiders right away instead of
+    // sleeping through the first half of the countdown in its decision lull.
+    for (const a of this.actors) {
+      if (a.isPlayer || !a.alive || a.kind !== "crew") continue;
+      a.nextDecisionAt = Math.min(a.nextDecisionAt, this.time + this.rng.range(0.5, 2));
+    }
     return true;
   }
 
@@ -1236,7 +1242,15 @@ export class GameEngine {
     }
 
     const view = this.buildView(a);
-    const nextIn = a.role === "imposter" ? this.rng.range(7, 11) : this.rng.range(10, 16);
+    // A live hazard collapses everyone's decision lull: with the Skeld's long
+    // cross-map runs, a 10-16s cadence means the crew arrives at the repair
+    // panel with no time left to actually choose FIX.
+    const nextIn =
+      this.sabotage && a.kind === "crew"
+        ? this.rng.range(1.5, 3)
+        : a.role === "imposter"
+          ? this.rng.range(7, 11)
+          : this.rng.range(10, 16);
     a.nextDecisionAt = this.time + nextIn;
 
     if (this.llmEnabled && a.cfg) {

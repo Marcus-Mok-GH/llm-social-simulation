@@ -80,7 +80,24 @@ const atPoi = (id: string) => {
   return engine;
 };
 
-const taskEngine = atPoi("task_mess");
+/**
+ * The player is handed a fixed slice of the map's task list, so ask the engine
+ * which console that actually is instead of hardcoding one — adding rooms to
+ * the map shifts which consoles land in the player's four.
+ */
+const atPlayerTask = () => {
+  const engine = new GameEngine({ playerIsImposter: false, llm: false });
+  engine.begin();
+  const id = engine.playerTasks[0]?.poiId;
+  if (!id) throw new Error("the player was assigned no tasks");
+  const poi = engine.map.pointsOfInterest.find((p) => p.id === id);
+  if (!poi) throw new Error(`missing player task POI ${id}`);
+  engine.player.x = poi.x;
+  engine.player.y = poi.y;
+  return engine;
+};
+
+const taskEngine = atPlayerTask();
 taskEngine.interact();
 check(
   "interacting with a task reports the open task",
@@ -94,7 +111,7 @@ check(
   meetingEngine.meeting !== null,
 );
 
-const repairEngine = atPoi("sab_power");
+const repairEngine = atPoi("sab_lights");
 repairEngine.interact();
 check(
   "interacting at a repair console keeps hold-to-repair available",

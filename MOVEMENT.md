@@ -23,8 +23,9 @@ The main files involved:
 
 ## 1. The world is a node graph (`src/game/zones.ts`)
 
-Every room and every corridor is a node. A corridor is an *edge* joining the two
-rooms it connects, so adjacency is just a lookup:
+Every room and every corridor is a node. A corridor is a *hub* joining every
+room it opens onto — the Skeld's west hall alone joins four — so adjacency is
+just a lookup:
 
 - `buildZoneGraph(map)` builds the graph from map data — rooms, corridors, and a
   case-insensitive `lookup` of id/name/short label to zone id.

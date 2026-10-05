@@ -16,8 +16,10 @@
  * Run: bun scripts/simulate.ts
  */
 
+import { type Vec2 } from "../src/game/collision";
 import { GameEngine } from "../src/game/engine";
 import { UMBRA_DECK_MAP } from "../src/game/map";
+import { buildNavGrid, findPath, type NavGrid } from "../src/game/navigation";
 import { rankSuspects } from "../src/game/perception";
 
 let failures = 0;
@@ -30,7 +32,31 @@ function check(cond: boolean, msg: string): void {
 
 const MOVE = ["w", "a", "s", "d"];
 
-/** Walk the human toward their next unfinished console and work it. */
+interface DriverState {
+  grid: NavGrid;
+  path: Vec2[];
+  wp: number;
+  target: string;
+  stuck: number;
+  repath: number;
+  lastX: number;
+  lastY: number;
+}
+
+const driverState = new WeakMap<GameEngine, DriverState>();
+
+const WAYPOINT_EPS = 12;
+const INTERACT_DIST = 50;
+const STUCK_SECONDS = 1.2;
+const REPATH_COOLDOWN = 0.25;
+
+/**
+ * Walk the human toward their next unfinished console and work it.
+ *
+ * The driver steers with movement keys only (the same w/a/s/d the real player
+ * uses), but chooses its heading by following an A* path on the nav grid, so
+ * it can actually route through corridors instead of grinding into walls.
+ */
 function drivePlayer(engine: GameEngine): void {
   const me = engine.playerActor;
   if (engine.phase !== "playing" || !me.alive) {
@@ -45,13 +71,72 @@ function drivePlayer(engine: GameEngine): void {
   const poi = engine.map.pointsOfInterest.find((p) => p.id === task.poiId);
   if (!poi) return;
 
-  const dx = poi.x - me.entity.x;
-  const dy = poi.y - me.entity.y;
-  engine.setKey("d", dx > 10);
-  engine.setKey("a", dx < -10);
-  engine.setKey("s", dy > 10);
-  engine.setKey("w", dy < -10);
-  if (Math.hypot(dx, dy) < 50) engine.interact();
+  let st = driverState.get(engine);
+  if (!st) {
+    // Player radius is 16; a cell is only walkable when the player fits there.
+    st = {
+      grid: buildNavGrid(engine.map, 24, 16),
+      path: [],
+      wp: 0,
+      target: "",
+      stuck: 0,
+      repath: 0,
+      lastX: me.entity.x,
+      lastY: me.entity.y,
+    };
+    driverState.set(engine, st);
+  }
+
+  const dist = Math.hypot(poi.x - me.entity.x, poi.y - me.entity.y);
+  if (dist < INTERACT_DIST) {
+    for (const k of MOVE) engine.setKey(k, false);
+    engine.interact();
+    return;
+  }
+
+  const repath = (): void => {
+    st!.path = findPath(st!.grid, { x: me.entity.x, y: me.entity.y }, { x: poi.x, y: poi.y }) ?? [];
+    st!.wp = 0;
+    st!.target = task.poiId;
+    st!.stuck = 0;
+    st!.repath = REPATH_COOLDOWN;
+  };
+
+  // Re-path immediately on a new console; otherwise when we ran out of
+  // waypoints or hit the stuck watchdog (throttled so a failure to path
+  // doesn't burn an A* search every frame).
+  if (st.target !== task.poiId) repath();
+  else st.repath = Math.max(0, st.repath - 1 / 60);
+
+  const moved = Math.hypot(me.entity.x - st.lastX, me.entity.y - st.lastY);
+  st.lastX = me.entity.x;
+  st.lastY = me.entity.y;
+  if (moved < 2) st.stuck += 1 / 60;
+  else st.stuck = 0;
+
+  if (st.wp >= st.path.length || st.stuck > STUCK_SECONDS) {
+    if (st.repath <= 0) repath();
+  }
+
+  // Steer toward the next waypoint, consuming the ones we've reached.
+  let tx = poi.x;
+  let ty = poi.y;
+  while (st.wp < st.path.length) {
+    const w = st.path[st.wp];
+    if (Math.hypot(w.x - me.entity.x, w.y - me.entity.y) < WAYPOINT_EPS) st.wp++;
+    else {
+      tx = w.x;
+      ty = w.y;
+      break;
+    }
+  }
+
+  const dx = tx - me.entity.x;
+  const dy = ty - me.entity.y;
+  engine.setKey("d", dx > 6);
+  engine.setKey("a", dx < -6);
+  engine.setKey("s", dy > 6);
+  engine.setKey("w", dy < -6);
 }
 
 interface Outcome {
@@ -212,7 +297,7 @@ const fingerprint = (seed: number): string => {
   for (let i = 0; i < 600; i++) {
     for (const a of engine.actors) {
       if (a.isPlayer || !a.alive) continue;
-      const d = Math.hypot(a.entity.x - 840, a.entity.y - 340);
+      const d = Math.hypot(a.entity.x - 900, a.entity.y - 250);
       if (d > 400) engine.setKey("a", true);
     }
     engine.tick(1 / 60);

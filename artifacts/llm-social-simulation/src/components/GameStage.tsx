@@ -18,6 +18,9 @@ const HUD_BAND = 150;
 /** Space reserved below the deck for the log, prompt and thumb controls. */
 const CONTROL_BAND = 205;
 
+/** The downloaded Skeld reference art, served from `public/`. */
+const SKELD_MAP_IMAGE = `${import.meta.env?.BASE_URL ?? "/"}skeld-map.webp`;
+
 interface GameStageProps {
   className?: string;
   history?: MatchRecord[];
@@ -68,6 +71,7 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
   const [engine, setEngine] = useState(() => new GameEngine());
   const [snap, setSnap] = useState<Snapshot>(() => engine.snapshot());
   const [analyst, setAnalyst] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
   const isMobile = useIsMobile();
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -260,7 +264,7 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
         <canvas
           ref={canvasRef}
           role="img"
-          aria-label="Umbra Station deck map — a playable social-deduction match with fog of war"
+          aria-label="The Skeld deck map — a playable social-deduction match with fog of war"
           className="block w-full rounded-xl border border-void-700 bg-void-950"
         />
       </div>
@@ -279,7 +283,43 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
           engine.toggleLlm(!snap.llm.enabled);
           sync();
         }}
+        mapOpen={mapOpen}
+        onToggleMap={() => setMapOpen((v) => !v)}
       />
+
+      {/* The downloaded Skeld image: a reference overlay, not the walkable
+          deck — the canvas above is what collision and pathfinding use. */}
+      {mapOpen && (
+        <div
+          role="dialog"
+          aria-label="The Skeld station map"
+          className="absolute inset-0 z-30 flex items-center justify-center bg-void-950/90 p-4"
+        >
+          <div className="flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-void-700 bg-void-950/95 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-void-700 px-3 py-2">
+              <p className="text-[10px] tracking-[0.2em] text-slate-500">
+                THE SKELD · REFERENCE MAP
+              </p>
+              <button
+                type="button"
+                onClick={() => setMapOpen(false)}
+                className="rounded-full border border-void-700 px-3 py-1 text-[10px] tracking-widest text-slate-400 transition hover:text-slate-200"
+              >
+                CLOSE
+              </button>
+            </div>
+            <img
+              src={SKELD_MAP_IMAGE}
+              alt="The Skeld — official station map"
+              className="max-h-[68vh] w-full object-contain"
+            />
+            <p className="border-t border-void-700 px-3 py-2 text-[10px] leading-relaxed text-slate-600">
+              Reference art (Innersloth). The playable deck follows the same rooms
+              and corridors, but the artwork does not line up pixel-for-pixel.
+            </p>
+          </div>
+        </div>
+      )}
 
       {isMobile && snap.phase === "playing" && !snap.meeting && !snap.activeTask && (
         <TouchControls engine={engine} snap={snap} onAction={sync} />

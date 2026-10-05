@@ -2,7 +2,7 @@
  * Validates the deck map data model:
  *  - every room/corridor/POI is inside world bounds
  *  - no two rooms overlap
- *  - each corridor references real rooms and touches both of them
+ *  - each corridor references real rooms and touches every one of them
  *  - each POI sits inside its room
  *  - the room graph is connected
  *
@@ -91,8 +91,11 @@ for (const p of map.pointsOfInterest) {
 const adj = new Map<string, string[]>();
 for (const r of map.rooms) adj.set(r.id, []);
 for (const c of map.corridors) {
-  adj.get(c.connects[0])?.push(c.connects[1]);
-  adj.get(c.connects[1])?.push(c.connects[0]);
+  for (const a of c.connects) {
+    for (const b of c.connects) {
+      if (a !== b) adj.get(a)?.push(b);
+    }
+  }
 }
 const seen = new Set<string>();
 const queue = [map.rooms[0].id];

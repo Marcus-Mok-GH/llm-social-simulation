@@ -10,21 +10,27 @@ to trust, and **argue and vote** in meetings.
 
 | System | Notes |
 |---|---|
-| Map & renderer | 12 rooms / 15 corridors, Canvas 2D, camera-fit, A\* navigation grid |
+| Map & renderer | The Skeld: 15 locations / 10 corridors, Canvas 2D, camera-fit, A\* navigation grid |
 | **Vision fog** | Ray-cast visibility polygon + persistent "explored" memory, with wall occlusion |
 | Player | WASD movement, wall collision, contextual actions, spectator mode when dead |
 | **Tasks** | Per-agent task lists, shared station bar, two playable minigames (wiring, calibration) |
 | **Interactions** | Agents choose `INTERACT` (`TASK`/`KILL`/`FIX`/`REPORT`/`EMERGENCY`) against objects in their current node; the engine re-checks distance, game state and line of sight, rejects illegal actions and feeds the reason back as `system_message` |
 | **Kills & bodies** | Kill is a validated interaction with a real witness check (line of sight within 230u), corpses, reporting |
-| **Sabotage** | Reactor meltdown (45s) and grid overload (halves every agent's vision), fixed by standing on the console |
+| **Sabotage** | Reactor meltdown (45s — repaired at a Reactor hand scanner) and lights out (halves every agent's vision — repaired in Electrical) |
 | **Meetings** | Report or emergency beacon → discussion → voting → tally → ejection |
 | **Belief model** | Per-agent complete match log (every event, sighting, decision and meeting, from start to finish) + suspicion vector with decay, vent sightings, body-room inference |
 | **LLM decision loop** | A configurable OpenAI-compatible provider (Pollinations or Berget) returns validated JSON intents (`MOVE`/`INTERACT`/`VENT`/`SABOTAGE`) and meeting lines; each AI agent runs a **different** model from a cheap-model pool, with heuristic fallback on any failure |
 | **Persistence** | Finished matches, transcripts and every agent's suspicion snapshot saved to `localStorage` |
 | Analyst view | Optional overlay showing each agent's current top suspect |
+| **Reference map** | A `MAP` chip overlays the official Skeld artwork (`public/skeld-map.webp`) for comparison with the playable deck |
 
-Mechanics, room names, art and terminology are original IP. The layout keeps the
-*concept* of a ship with rooms joined by corridors and a hidden-traitor loop.
+**Map provenance.** The deck layout is The Skeld from *Among Us* — 14 rooms plus
+the named Hallway, the seven corridors of the real ship, 14 vent grates in six
+chains, four hallway cameras, and the sabotage consoles where they are on the
+real map. All of it lives as data in `src/game/map.ts`; the artwork in
+`public/skeld-map.webp` is © Innersloth and is shown as a reference overlay only.
+Everything else — station name, crew, roles, dialogue, task presentation and the
+rest of the art — is original.
 
 ## Run
 

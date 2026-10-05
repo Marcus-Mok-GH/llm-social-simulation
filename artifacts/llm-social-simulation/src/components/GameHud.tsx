@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { BrainCircuit, Eye } from "lucide-react";
+import { BrainCircuit, Eye, Map as MapIcon } from "lucide-react";
 import type { Snapshot } from "@/game/engine";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +11,9 @@ interface GameHudProps {
   onToggleAnalyst: () => void;
   llmOn: boolean;
   onToggleLlm: () => void;
+  /** The Skeld reference image overlay. */
+  mapOpen: boolean;
+  onToggleMap: () => void;
 }
 
 function Chip({
@@ -62,6 +65,8 @@ export function GameHud({
   onToggleAnalyst,
   llmOn,
   onToggleLlm,
+  mapOpen,
+  onToggleMap,
 }: GameHudProps) {
   const isImposter = snap.role === "imposter";
   const aliveCount = snap.alive.crew + snap.alive.imposter;
@@ -93,7 +98,7 @@ export function GameHud({
           />
           <div
             className="absolute inset-x-0 top-0 h-[3px] bg-[#ff2d4d]/25"
-            title={`${snap.sabotage.kind === "meltdown" ? "Reactor meltdown" : "Grid overload"} — ${snap.sabotage.secondsLeft.toFixed(1)}s`}
+            title={`${snap.sabotage.kind === "meltdown" ? "Reactor meltdown" : "Lights out"} — ${snap.sabotage.secondsLeft.toFixed(1)}s`}
           >
             <div
               className="h-full bg-[#ff2d4d]"
@@ -107,11 +112,11 @@ export function GameHud({
               }}
             />
             <span className="sr-only">
-              {snap.sabotage.kind === "meltdown" ? "Reactor meltdown" : "Grid overload"},{" "}
-              {Math.ceil(snap.sabotage.secondsLeft)} seconds left. Repair at the
+              {snap.sabotage.kind === "meltdown" ? "Reactor meltdown" : "Lights out"},{" "}
+              {Math.ceil(snap.sabotage.secondsLeft)} seconds left. Repair{" "}
               {snap.sabotage.kind === "meltdown"
-                ? " reactor or life support"
-                : " power bay"}
+                ? "at a hand scanner in Reactor"
+                : "the panel in Electrical"}
               .
             </span>
           </div>
@@ -150,6 +155,14 @@ export function GameHud({
           >
             <BrainCircuit className="h-3 w-3" />
             {llmOn ? "LLM ON" : "LLM OFF"}
+          </Chip>
+          <Chip
+            active={mapOpen}
+            onClick={onToggleMap}
+            title="Show the Skeld station map"
+          >
+            <MapIcon className="h-3 w-3" />
+            MAP
           </Chip>
         </div>
       </div>

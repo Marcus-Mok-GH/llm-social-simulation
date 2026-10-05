@@ -89,12 +89,12 @@ function ventPois(map: GameMap): PointOfInterest[] {
 }
 
 /** Pick a random vent, preferring one other than the last used. */
-function pickVent(map: GameMap, excludeId: string | null): PointOfInterest | null {
+function pickVent(map: GameMap, imp: Imposter): PointOfInterest | null {
   const vents = ventPois(map);
   if (vents.length === 0) return null;
-  const candidates = vents.filter((v) => v.id !== excludeId);
+  const candidates = vents.filter((v) => v.id !== imp.targetPoiId);
   const pool = candidates.length > 0 ? candidates : vents;
-  return pool[Math.floor(Math.random() * pool.length)];
+  return pool[Math.floor(rand(imp) * pool.length)];
 }
 
 /** Nearest vent to the imposter (optionally excluding one). */
@@ -307,7 +307,7 @@ function updateSeekingVent(
   const result = followPath(map, imp, dt);
 
   if (result === "arrived") {
-    const to = pickVent(map, imp.targetPoiId);
+    const to = pickVent(map, imp);
     imp.ventFromId = imp.targetPoiId;
     imp.ventToId = to?.id ?? null;
     imp.lastVentId = imp.ventFromId;
