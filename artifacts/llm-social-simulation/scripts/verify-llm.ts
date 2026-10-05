@@ -185,6 +185,12 @@ const stmt = await statementWithModel(
   {
     others: ["crew:0", "crew:1", "imp:0", "player"],
     playerLine: "I was in the mess hall the whole time.",
+    transcript: [
+      { speaker: "ORION", text: "I was in the mess hall the whole time." },
+      { speaker: "VEGA", text: "I found the body — who was even near MedBay?" },
+    ],
+    humanLines: ["I was in the mess hall the whole time."],
+    turn: 1,
     bodiesFound: 1,
     ejectedSoFar: [],
   },
@@ -206,7 +212,15 @@ const impStmt = await statementWithModel(
   impMind,
   { key: "imp:0", name: "SHADE" },
   names,
-  { others: ["crew:0", "crew:1", "imp:1"], playerLine: "SHADE was near the vents.", bodiesFound: 1, ejectedSoFar: [] },
+  {
+    others: ["crew:0", "crew:1", "imp:1"],
+    playerLine: "SHADE was near the vents.",
+    transcript: [{ speaker: "ORION", text: "SHADE was near the vents." }],
+    humanLines: ["SHADE was near the vents."],
+    turn: 2,
+    bodiesFound: 1,
+    ejectedSoFar: [],
+  },
 );
 console.log("\n[meeting] imposter line:", JSON.stringify(impStmt));
 check(impStmt !== null, "imposter produced a validated meeting statement");

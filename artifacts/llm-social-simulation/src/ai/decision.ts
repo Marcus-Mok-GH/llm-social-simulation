@@ -465,22 +465,38 @@ export interface StatementInput {
   others: string[];
   /** What the human said earlier in this meeting, if anything. */
   playerLine: string | null;
+  /**
+   * The running discussion so far — every spoken line this meeting, including
+   * the human's — so agents respond to the actual conversation instead of
+   * talking past each other.
+   */
+  transcript: { speaker: string; text: string }[];
+  /** Every line the human said this meeting, oldest first. Always read in full. */
+  humanLines: string[];
+  /** How many times this agent has already spoken this meeting (1-based). */
+  turn: number;
   bodiesFound: number;
   ejectedSoFar: string[];
 }
 
 function statementSystem(mind: Mind): string {
+  const live = [
+    "This is a live group discussion: read the conversation so far, react to what others — including the human player — said, and answer the human directly if they addressed you.",
+    "Never repeat a line that anyone has already said.",
+  ];
   if (mind.role === "imposter") {
     return [
       "You are the hidden traitor in a social-deduction meeting aboard a space station.",
       "Stay calm, deflect, never reveal yourself, and push suspicion onto an innocent crew member.",
       "Do not contradict facts you could not possibly know.",
+      ...live,
       'Reply with ONLY JSON: {"line":"<one or two sentences>","accuse":"<name or null>"}',
     ].join("\n");
   }
   return [
     "You are an honest crew member in a social-deduction meeting aboard a space station.",
     "Report what you remember and name who you suspect. One or two sentences, spoken aloud.",
+    ...live,
     'Reply with ONLY JSON: {"line":"<one or two sentences>","accuse":"<name or null>"}',
   ].join("\n");
 }
@@ -518,7 +534,9 @@ export async function statementWithModel(
     alive: input.others.map((k) => nameOf(names, k)),
     bodiesFound: input.bodiesFound,
     ejectedSoFar: input.ejectedSoFar.map((k) => nameOf(names, k)),
-    lastThingHumanSaid: input.playerLine,
+    whatTheHumanSaid: input.humanLines,
+    conversationSoFar: input.transcript,
+    yourTurnNumber: input.turn,
     yourGoal: mind.goal,
     // The complete meeting record, not a tail: every line from every meeting.
     meetingHistory: mind.meetings.map((m) => ({
@@ -528,7 +546,7 @@ export async function statementWithModel(
       ejected: m.ejected ? m.ejected.name : null,
     })),
     instruction:
-      "Your vote will be calculated from your suspicion scores separately — only produce the spoken line and who you accuse.",
+      "This discussion is ongoing — build on the conversation so far and on what the human said (answer them directly if they spoke to you), and never repeat anything already said. Your vote will be calculated from your suspicion scores separately — only produce the spoken line and who you accuse.",
   };
 
   const release = await ctx.gate.acquire();
@@ -566,9 +584,13 @@ export function fallbackStatement(
   mind: Mind,
   speaker: { key: string; name: string },
   names: NameIndex,
-  input: { others: string[]; playerLine: string | null },
+  input: StatementInput,
 ): Statement {
-  return heuristicStatement(map, mind, speaker, names, input);
+  return heuristicStatement(map, mind, speaker, names, {
+    others: input.others,
+    playerLine: input.playerLine,
+    turn: input.turn,
+  });
 }
 
 export function roomNameOf(map: GameMap, roomId: RoomId): string {

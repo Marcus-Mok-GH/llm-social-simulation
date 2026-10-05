@@ -137,7 +137,18 @@ export const MATCH_LIMIT = 600;
 const DISCUSSION_TIME = 60;
 const VOTING_TIME = 20;
 const TALLY_TIME = 6;
-const LLM_BUDGET = 150;
+/**
+ * How many recent transcript lines each agent reads before speaking, so the
+ * discussion is a real back-and-forth: agents answer each other and the human
+ * instead of monologuing from memory alone.
+ */
+const TRANSCRIPT_WINDOW = 14;
+/**
+ * Statements now flow for the whole discussion window (a turn every few
+ * seconds per meeting), so the shared budget needs headroom above what the
+ * movement-intent loop alone consumed.
+ */
+const LLM_BUDGET = 240;
 
 export type Phase = "briefing" | "playing" | "meeting" | "ended";
 export type Winner = "crew" | "imposter" | null;
@@ -201,7 +212,6 @@ export interface Actor {
   killCooldown: number;
   /** Time until which this agent counts as actively repairing a sabotage. */
   fixUntil: number;
-  speakAt: number;
   voteAt: number;
 }
 
@@ -214,7 +224,12 @@ interface MeetingState {
   ejected: string | null;
   ejectedRole: "crew" | "imposter" | null;
   playerLine: string | null;
-  spoken: Set<string>;
+  /** Utterances per agent key this meeting — drives fair speaker rotation. */
+  spoken: Map<string, number>;
+  /** When the next agent turn is due; the discussion runs the full timer. */
+  turnAt: number;
+  /** Last agent who spoke, so the same voice rarely repeats. */
+  lastSpeaker: string | null;
   /** Index into `messages` where this meeting's transcript begins. */
   msgStart: number;
 }
@@ -423,7 +438,6 @@ export class GameEngine {
         repathAt: 0,
         killCooldown: 0,
         fixUntil: 0,
-        speakAt: 0,
         voteAt: 0,
       },
       ...this.crewmates.map((e, i) => this.makeActor(`crew:${i}`, e, "crew", i)),
@@ -527,7 +541,6 @@ export class GameEngine {
       repathAt: 0,
       killCooldown: role === "imposter" ? 34 : 0,
       fixUntil: 0,
-      speakAt: 0,
       voteAt: 0,
     };
   }
@@ -1581,17 +1594,13 @@ export class GameEngine {
       ejected: null,
       ejectedRole: null,
       playerLine: null,
-      spoken: new Set(),
+      spoken: new Map(),
+      turnAt: this.time + 1.5,
+      lastSpeaker: null,
       msgStart: this.messages.length,
     };
 
-    let i = 0;
-    for (const a of living) {
-      if (a.isPlayer) continue;
-      a.speakAt = this.time + 1.4 + i * 2.1 + this.rng.range(0, 1.2);
-      a.voteAt = 0;
-      i++;
-    }
+    for (const a of living) a.voteAt = 0;
 
     this.meeting = meeting;
     // Everyone respawns metres from the beacon — without a lockout the very
@@ -1655,13 +1664,7 @@ export class GameEngine {
     const living = this.living();
 
     if (m.stage === "discussion") {
-      for (const a of living) {
-        if (a.isPlayer || m.spoken.has(a.key)) continue;
-        if (this.time >= a.speakAt) {
-          m.spoken.add(a.key);
-          this.speak(a, m);
-        }
-      }
+      if (this.time >= m.turnAt) this.discussionTurn(m, living);
       if (m.timer <= 0) this.openVoting(m, living);
       return;
     }
@@ -1707,24 +1710,70 @@ export class GameEngine {
     this.openVoting(m, this.living());
   }
 
+  /**
+   * One turn of the standing discussion. The room keeps talking until the
+   * timer runs out: each turn picks the agent that has spoken least (never
+   * the same voice twice in a row) and schedules the next reply a couple of
+   * seconds out, so the meeting reads as a real back-and-forth rather than a
+   * one-shot roll call followed by silence.
+   */
+  private discussionTurn(m: MeetingState, living: Actor[]): void {
+    const candidates = living.filter((a) => !a.isPlayer);
+    if (candidates.length > 0) {
+      const fewest = Math.min(...candidates.map((a) => m.spoken.get(a.key) ?? 0));
+      let pool = candidates.filter(
+        (a) => (m.spoken.get(a.key) ?? 0) === fewest && a.key !== m.lastSpeaker,
+      );
+      if (pool.length === 0) pool = candidates.filter((a) => a.key !== m.lastSpeaker);
+      if (pool.length === 0) pool = candidates;
+      const speaker = this.rng.pick(pool);
+      m.spoken.set(speaker.key, (m.spoken.get(speaker.key) ?? 0) + 1);
+      m.lastSpeaker = speaker.key;
+      this.speak(speaker, m);
+    }
+    m.turnAt = this.time + 2.2 + this.rng.range(0, 2.4);
+  }
+
+  /** Speech-only lines of the running meeting — agents' lines and the human's. */
+  private meetingTranscript(m: MeetingState): { speaker: string; text: string }[] {
+    return this.messages
+      .slice(m.msgStart)
+      .filter((c) => c.kind === "statement" || c.kind === "player")
+      .slice(-TRANSCRIPT_WINDOW)
+      .map((c) => ({ speaker: c.speakerName, text: c.text }));
+  }
+
+  /** Everything the human has said this meeting, oldest first. */
+  private meetingHumanLines(m: MeetingState): string[] {
+    return this.messages
+      .slice(m.msgStart)
+      .filter((c) => c.kind === "player")
+      .slice(-8)
+      .map((c) => c.text);
+  }
+
   private speak(a: Actor, m: MeetingState): void {
     const input = {
       others: this.living().map((x) => x.key),
       playerLine: m.playerLine,
+      // The running discussion (including the human's lines) as it stood
+      // before this turn, so the agent can respond to what was actually said.
+      transcript: this.meetingTranscript(m),
+      humanLines: this.meetingHumanLines(m),
+      turn: m.spoken.get(a.key) ?? 1,
+      bodiesFound: this.bodies.length,
+      ejectedSoFar: [] as string[],
     };
 
     const post = (stmt: Statement): void => {
-      if (this.phase !== "meeting") return;
+      // Late model replies must not leak into voting or the next meeting.
+      if (this.meeting !== m || m.stage !== "discussion") return;
       this.say(a, stmt.line);
       if (stmt.accuse) this.applyAccusation(a, stmt.accuse, m);
     };
 
     if (this.llmEnabled && a.cfg) {
-      void statementWithModel(this.contextFor(a), this.map, a.mind, { key: a.key, name: a.name }, this.names, {
-        ...input,
-        bodiesFound: this.bodies.length,
-        ejectedSoFar: [],
-      })
+      void statementWithModel(this.contextFor(a), this.map, a.mind, { key: a.key, name: a.name }, this.names, input)
         .then((stmt) => {
           if (stmt) {
             this.llmCalls++;
@@ -1767,6 +1816,8 @@ export class GameEngine {
     const me = this.playerActor;
     m.playerLine = trimmed;
     this.say(me, trimmed, "player");
+    // A human remark deserves a reply — pull the next agent turn forward.
+    if (m.stage === "discussion") m.turnAt = Math.min(m.turnAt, this.time + 1.2);
   }
 
   private chooseVote(a: Actor, living: Actor[]): string | null {

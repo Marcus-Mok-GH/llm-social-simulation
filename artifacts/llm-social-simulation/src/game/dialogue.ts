@@ -64,41 +64,66 @@ export function memoryToLine(
 /**
  * Pick a line: prefer the most incriminating recent memory, otherwise fall
  * back to a suspicion-based accusation, otherwise an alibi.
+ *
+ * `ctx.turn` (how many times this agent has spoken this meeting) rotates
+ * through memories and phrasings, because agents now keep talking for the
+ * whole discussion — a one-liner library would otherwise repeat verbatim.
  */
 export function heuristicStatement(
   map: GameMap,
   mind: Mind,
   speaker: Speaker,
   names: NameIndex,
-  ctx: { others: string[]; playerLine: string | null },
+  ctx: { others: string[]; playerLine: string | null; turn?: number },
 ): Statement {
+  const turn = ctx.turn ?? 0;
   const priority: MemoryEntry["kind"][] = ["kill", "vent", "body", "sabotage", "sighted", "task"];
 
   for (const kind of priority) {
+    const matches: MemoryEntry[] = [];
     for (let i = mind.memories.length - 1; i >= 0; i--) {
-      const m = mind.memories[i];
-      if (m.kind !== kind) continue;
-      const line = memoryToLine(map, m, speaker, names);
-      if (!line) continue;
-      const top = rankSuspects(mind, 0.2);
-      return { line, accuse: top.length > 0 ? top[0].key : null };
+      if (mind.memories[i].kind === kind) matches.push(mind.memories[i]);
     }
+    if (matches.length === 0) continue;
+    const line = memoryToLine(map, matches[turn % matches.length], speaker, names);
+    if (!line) continue;
+    const top = rankSuspects(mind, 0.2);
+    return { line, accuse: top.length > 0 ? top[0].key : null };
   }
 
   const top = rankSuspects(mind, 0.18);
   if (top.length > 0) {
-    return {
-      line: `No proof yet, but ${names[top[0].key] ?? top[0].key} is who I'd watch.`,
-      accuse: top[0].key,
-    };
+    const who = names[top[0].key] ?? top[0].key;
+    const jabs = [
+      `No proof yet, but ${who} is who I'd watch.`,
+      `Still no proof, but keep an eye on ${who}.`,
+      `If you ask me, ${who} is the one acting strange.`,
+    ];
+    return { line: jabs[turn % jabs.length], accuse: top[0].key };
   }
 
   if (ctx.playerLine && mind.role === "imposter") {
     // Imposters deflect rather than agree.
     const target = ctx.others.find((k) => k !== mind.key && !mind.allies.includes(k));
     if (target) {
-      return { line: `That's a deflection — ${names[target] ?? target} was nowhere near it.`, accuse: target };
+      const who = names[target] ?? target;
+      const deflects = [
+        `That's a deflection — ${who} was nowhere near it.`,
+        `Convenient story. ${who} is the one steering us in circles.`,
+        `Don't follow that. Where was ${who}, exactly?`,
+      ];
+      return { line: deflects[turn % deflects.length], accuse: target };
     }
+  }
+
+  if (ctx.playerLine && mind.role === "crew") {
+    // Crew acknowledge the human before falling back to an alibi.
+    const acks = [
+      "Fair. My read hasn't changed though — I've got nothing new.",
+      "I hear you. If anyone saw something, now's the time.",
+      "Maybe. I'd still like to hear where everyone actually was.",
+    ];
+    return { line: acks[turn % acks.length], accuse: null };
   }
 
   const alibis = [
@@ -106,7 +131,7 @@ export function heuristicStatement(
     "No idea. I kept my head down and worked.",
     "Whoever it was, they moved fast — I lost them in the corridors.",
   ];
-  const idx = Math.abs(mind.key.length + mind.memories.length) % alibis.length;
+  const idx = Math.abs(mind.key.length * 7 + mind.memories.length + turn) % alibis.length;
   return { line: alibis[idx], accuse: null };
 }
 
