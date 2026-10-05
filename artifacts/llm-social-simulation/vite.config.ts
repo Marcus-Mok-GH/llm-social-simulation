@@ -2,27 +2,17 @@ import path from 'path';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-const rawPort = process.env.PORT;
+// PORT and BASE_PATH are injected by the dev/preview host. A production build
+// (`vite build`) runs in a clean image without them, so both fall back to the
+// standard Vite defaults instead of throwing — otherwise `vite build` can only
+// ever run inside the preview sandbox.
+const port = Number(process.env.PORT ?? 5173);
 
-if (!rawPort) {
-  throw new Error(
-    'PORT environment variable is required but was not provided.',
-  );
+if (!Number.isInteger(port) || port <= 0) {
+  throw new Error(`Invalid PORT value: "${process.env.PORT}"`);
 }
 
-const port = Number(rawPort);
-
-if (Number.isNaN(port) || port <= 0) {
-  throw new Error(`Invalid PORT value: "${rawPort}"`);
-}
-
-const basePath = process.env.BASE_PATH;
-
-if (!basePath) {
-  throw new Error(
-    'BASE_PATH environment variable is required but was not provided.',
-  );
-}
+const basePath = process.env.BASE_PATH ?? '/';
 
 export default defineConfig({
   base: basePath,
@@ -46,7 +36,8 @@ export default defineConfig({
   },
   root: path.resolve(import.meta.dirname),
   build: {
-    outDir: path.resolve(import.meta.dirname, 'dist/public'),
+    // Static hosting serves the built site straight from dist/.
+    outDir: path.resolve(import.meta.dirname, 'dist'),
     emptyOutDir: true,
   },
   server: {
