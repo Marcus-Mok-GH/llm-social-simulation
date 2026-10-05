@@ -45,33 +45,33 @@ const player = createPlayer(map);
 check(canStand(map, player.x, player.y, player.radius), "spawn position is walkable");
 const start = { x: player.x, y: player.y };
 
-// 2. Move right until blocked by the Cafeteria's east wall (x = 1160).
+// 2. Move right until blocked by the Cafeteria's east wall (x = 1338).
 check(run(player, { x: 1, y: 0 }, 240), "stayed walkable while moving right");
 check(player.x > start.x + 50, "player actually moved right");
-check(player.x <= 1160 - player.radius + 0.5, "east wall blocks the player (x <= 1146)");
+check(player.x <= 1338 - player.radius + 0.5, "east wall blocks the player (x <= 1324)");
 
-// 3. Move left until blocked by the Cafeteria's west wall (x = 720).
+// 3. Move left until blocked by the Cafeteria's west wall (x = 848).
 //    1.5u of slack: the clearance test samples a ring, so a player can end one
 //    sample-step short of the exact wall distance.
 check(run(player, { x: -1, y: 0 }, 600), "stayed walkable while moving left");
-check(player.x >= 720 + player.radius - 1.5, "west wall blocks the player (x >= 734)");
+check(player.x >= 848 + player.radius - 1.5, "west wall blocks the player (x >= 862)");
 
 // 4. Hard wall test: at y=80 nothing opens to the north, so the Cafeteria's
-//    east wall must stop the player at x = 1160 - radius.
+//    east wall must stop the player at x = 1338 - radius.
 {
   const p = createPlayer(map);
-  p.x = 1100;
+  p.x = 1280;
   p.y = 80;
-  check(canStand(map, p.x, p.y, p.radius), "test start (1100,80) is walkable");
+  check(canStand(map, p.x, p.y, p.radius), "test start (1280,80) is walkable");
   run(p, { x: 1, y: 0 }, 120);
-  check(p.x <= 1160 - p.radius + 0.5, "cannot cross the Cafeteria wall at y=80");
+  check(p.x <= 1338 - p.radius + 0.5, "cannot cross the Cafeteria wall at y=80");
 }
 
 // 5. Corridor traversal: from the Cafeteria, go down through the Central Hall
-//    (x ~ 760..840) and confirm the player can pass the seam.
+//    (x ~ 1013..1130) and confirm the player can pass the seam.
 {
   const p = createPlayer(map);
-  p.x = 800;
+  p.x = 1070;
   p.y = 300;
   check(run(p, { x: 0, y: 1 }, 300), "stayed walkable while moving down into the corridor");
   check(p.y > 500, "player entered the Central Hall through the corridor (y > 500)");
