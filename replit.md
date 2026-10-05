@@ -40,9 +40,14 @@ Environment:
 - `src/game/vision.ts` — line-of-sight test, visibility grid, ray-cast polygon,
   explored memory. Source of truth for "can this agent see that?".
 - `src/game/perception.ts` — agent memory ring + suspicion vector.
-- `src/ai/decision.ts` — the pluggable AI layer: model-backed intents/dialogue
-  with heuristic fallbacks. `src/ai/llm.ts` — transport, rate gate, JSON extraction.
+- `src/ai/decision.ts` — the pluggable AI layer: node-graph serialization
+  (current_location, valid_moves, visible_players, current_time) plus
+  MOVE/VENT/SABOTAGE intents and meeting dialogue, with heuristic fallbacks.
+  `src/ai/llm.ts` — transport, rate gate, JSON extraction.
 - `src/game/map.ts` — the deck as data (rooms, corridors, points of interest).
+- `src/game/zones.ts` — the spatial node graph: rooms and corridors as discrete
+  zones, their adjacency, and `zoneAtPoint`/`zonePath`. AI movement is asked for
+  as a destination zone, which the engine resolves with A* in `navigation.ts`.
 - `src/components/GameStage.tsx` — canvas + engine loop + overlays; everything else is presentation.
 - `scripts/simulate.ts` — the behavioural test that actually proves the game loop works.
 

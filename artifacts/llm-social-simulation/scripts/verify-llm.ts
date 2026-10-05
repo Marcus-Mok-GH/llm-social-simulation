@@ -41,7 +41,25 @@ console.log(`Key      : ${cfg.apiKey.slice(0, 7)}… (${cfg.apiKey.length} chars
 
 const ai: AiContext = { cfg, gate: new RequestGate(0, 2), budget: { remaining: 20 } };
 
+type ZoneRef = WorldView["zones"][number];
+
+const zone = (id: string, name: string, kind: "room" | "corridor", adjacent = false): ZoneRef => ({
+  id,
+  name,
+  kind,
+  adjacent,
+});
+
 function view(role: "crew" | "imposter"): WorldView {
+  const zones: ZoneRef[] = [
+    zone("mess_hall", "Mess Hall", "room", true),
+    zone("infirmary", "Infirmary", "room"),
+    zone("power_bay", "Power Bay", "room"),
+    zone("nav", "Nav Console", "room"),
+    zone("hold", "Hold", "room"),
+    zone("c_mess_med", "mess_hall ↔ infirmary", "corridor", true),
+    zone("c_mess_watch", "mess_hall ↔ watchpost", "corridor", true),
+  ];
   return {
     self: {
       key: role === "imposter" ? "imp:0" : "crew:0",
@@ -50,7 +68,14 @@ function view(role: "crew" | "imposter"): WorldView {
       roomId: "mess_hall",
       roomName: "Mess Hall",
       alive: true,
+      zoneId: "mess_hall",
+      zoneName: "Mess Hall",
     },
+    current_location: "Mess Hall",
+    current_time: "02:45",
+    visible_players: ["VEGA"],
+    valid_moves: zones.filter((z) => z.adjacent),
+    zones,
     tasks: [
       { poiId: "task_mess", label: "Store rations", roomId: "mess_hall", roomName: "Mess Hall", done: false },
       { poiId: "task_med", label: "Scan vitals", roomId: "infirmary", roomName: "Infirmary", done: true },
@@ -62,9 +87,9 @@ function view(role: "crew" | "imposter"): WorldView {
     ],
     vents: ["vent_mess", "vent_med", "vent_power"],
     others: [
-      { key: "crew:1", name: "VEGA", roomId: "mess_hall", roomName: "Mess Hall", alive: true, visible: true, isolation: 420 },
-      { key: "crew:2", name: "JUNO", roomId: "infirmary", roomName: "Infirmary", alive: true, visible: false, isolation: 90 },
-      { key: "imp:1", name: "VEX", roomId: "hold", roomName: "Hold", alive: true, visible: false, isolation: 300 },
+      { key: "crew:1", name: "VEGA", roomId: "mess_hall", roomName: "Mess Hall", zoneId: "mess_hall", zoneName: "Mess Hall", alive: true, visible: true, isolation: 420, allied: false },
+      { key: "crew:2", name: "JUNO", roomId: "infirmary", roomName: "Infirmary", zoneId: "infirmary", zoneName: "Infirmary", alive: true, visible: false, isolation: 90, allied: false },
+      { key: "imp:1", name: "VEX", roomId: "hold", roomName: "Hold", zoneId: "hold", zoneName: "Hold", alive: true, visible: false, isolation: 300, allied: role === "imposter" },
     ],
     recent: ["[sighted] Saw VEGA in Mess Hall not long ago."],
     suspicions: [{ name: "VEGA", score: 0.4 }],
@@ -104,11 +129,12 @@ for (const role of ["crew", "imposter"] as const) {
   console.log(`\n[${role}] intent:`, JSON.stringify(intent));
   check(intent !== null, `${role} agent returned a validated intent`);
 
-  if (intent && intent.action === "sabotage") {
-    check(role === "imposter", "sabotage is only accepted from an imposter");
+  if (intent && (intent.action === "VENT" || intent.action === "SABOTAGE")) {
+    check(role === "imposter", "vent/sabotage is only accepted from an imposter");
   }
-  if (intent && (intent.action === "stalk" || intent.action === "hunt")) {
-    check(role === "imposter", "staking/hunting is only accepted from an imposter");
+  if (intent?.action === "MOVE") {
+    const known = new Set(view(role).zones.map((z) => z.id.toLowerCase()));
+    check(known.has(intent.target.toLowerCase()), "MOVE targets a known zone");
   }
 }
 

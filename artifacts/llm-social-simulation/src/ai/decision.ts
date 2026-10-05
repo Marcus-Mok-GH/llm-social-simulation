@@ -7,10 +7,16 @@
  *   2. What should I say in the meeting? -> `statementWithModel` / `fallbackStatement`
  *   3. Who do I vote for?                -> always the belief model (see engine.ts)
  *
- * The model path asks the agent's configured provider (Pollinations or Berget)
- * for JSON and validates it. On *any* failure — no key, timeout, rate limit,
- * malformed JSON, unsupported action — it returns `null` and the caller uses
- * the scripted heuristic, which is why the game keeps running in an offline demo.
+ * Movement is *node based* (PLAN.md): the engine serializes the agent's current
+ * zone, the zones it can step into, who it can see and the clock, and the model
+ * answers with a strict `{"action":"MOVE","target":"<zone>"}`. The engine then
+ * runs A* to the chosen zone and animates the sprite. Task work, kills, vents
+ * and sabotage stay engine-owned abilities layered on top of that movement.
+ *
+ * The model path asks the agent's configured provider for JSON and validates
+ * it. On *any* failure — no key, timeout, rate limit, malformed JSON,
+ * unsupported action — it returns `null` and the caller uses the scripted
+ * heuristic, which is why the game keeps running in an offline demo.
  */
 
 import { complete, extractJson, type ChatMessage, type LlmConfig } from "./llm";
@@ -23,16 +29,29 @@ import { roomById } from "../game/map";
 // What an agent knows about the world this tick
 // ---------------------------------------------------------------------------
 
+/** A node in the station's zone graph, as handed to the model. */
+export interface ZoneRef {
+  id: string;
+  name: string;
+  kind: "room" | "corridor";
+  /** True when directly connected to the agent's current zone. */
+  adjacent: boolean;
+}
+
 export interface ActorView {
   key: string;
   name: string;
   roomId: RoomId;
   roomName: string;
+  zoneId: string;
+  zoneName: string;
   alive: boolean;
   /** True only when the observer currently has line of sight to them. */
   visible: boolean;
   /** Distance from them to their nearest other companion — high means alone. */
   isolation: number;
+  /** True for a fellow traitor: never a target, never a suspect. */
+  allied: boolean;
 }
 
 export interface TaskRef {
@@ -50,7 +69,21 @@ export interface WorldView {
     roomId: RoomId;
     roomName: string;
     alive: boolean;
+    zoneId: string;
+    zoneName: string;
   };
+  /** --- Serialized spatial snapshot (PLAN.md step 2) --- */
+  /** Human-readable name of the zone the agent currently occupies. */
+  current_location: string;
+  /** Simulation clock, "MM:SS". */
+  current_time: string;
+  /** Names of the agents the observer can currently see. */
+  visible_players: string[];
+  /** Zones directly connected to the current zone. */
+  valid_moves: ZoneRef[];
+  /** Every node in the station graph, so multi-hop targets resolve. */
+  zones: ZoneRef[];
+  /** --- Richer context for persona / rules / history --- */
   /** Crew: their own task list. Imposter: empty (they only fake). */
   tasks: (TaskRef & { done: boolean })[];
   /** Every task console, so imposters can fake one. */
@@ -69,60 +102,66 @@ export interface WorldView {
 // Intents
 // ---------------------------------------------------------------------------
 
+/**
+ * The model's whole vocabulary. `MOVE` is the movement primitive (target is a
+ * zone id or name); `VENT` and `SABOTAGE` are the traitor's engine-owned
+ * abilities. Working a console and killing are resolved by proximity in the
+ * engine, never chosen by the model.
+ */
 export type Intent =
-  | { action: "goto_poi"; poiId: string }
-  | { action: "goto_room"; roomId: RoomId }
-  | { action: "group_up"; roomId: RoomId }
-  | { action: "stalk"; target: string }
-  | { action: "hunt" }
-  | { action: "fake_task"; poiId: string }
-  | { action: "vent"; poiId: string }
-  | { action: "sabotage" };
+  | { action: "MOVE"; target: string }
+  | { action: "VENT"; target?: string }
+  | { action: "SABOTAGE" };
 
-const INTENT_ACTIONS = [
-  "goto_poi",
-  "goto_room",
-  "group_up",
-  "stalk",
-  "hunt",
-  "fake_task",
-  "vent",
-  "sabotage",
-] as const;
-
+const INTENT_ACTIONS = ["MOVE", "VENT", "SABOTAGE"] as const;
 type IntentAction = (typeof INTENT_ACTIONS)[number];
 
 // ---------------------------------------------------------------------------
 // Prompt
 // ---------------------------------------------------------------------------
 
-const INTENT_SCHEMA =
-  'Reply with ONLY a JSON object: {"action":"<one of ' +
-  INTENT_ACTIONS.join("|") +
-  '>","poiId":"<console id>","roomId":"<room id>","target":"<actor key>","reason":"<<=12 words>"} ' +
-  "Include only the fields your chosen action needs. No prose, no markdown.";
+const INTENT_SCHEMA = [
+  "Reply with ONLY a JSON object:",
+  '{"action":"<one of ' + INTENT_ACTIONS.join("|") + '>","target":"<zone name>","reasoning":"<=12 words"}',
+  'For MOVE, "target" is a zone name (prefer one of your valid_moves; the station will path you there).',
+  'For VENT, "target" is an optional vent id. SABOTAGE takes no target.',
+  "Include only the fields your chosen action needs. No prose, no markdown.",
+].join(" ");
 
 function systemPrompt(view: WorldView): string {
+  const common = [
+    "You move around a space station that is described to you as a graph of zones",
+    "(rooms joined by corridors). You pick a destination zone; the station walks you there.",
+    INTENT_SCHEMA,
+  ];
+
   if (view.self.role === "imposter") {
     return [
       "You are a hidden traitor aboard a space station in a social-deduction game.",
-      "Blend in: fake tasks, linger near crew, never act suspicious.",
-      "Kill only when nobody has line of sight on you; use vents to escape afterwards.",
-      "Trigger sabotage to split the crew up and buy cover.",
-      "You are secretly allied with your fellow traitors and must never act against them.",
-      INTENT_SCHEMA,
+      "Your goal is to eliminate crewmates secretly while never looking suspicious.",
+      "You kill only by standing close to a lone crewmate with nobody watching, so move",
+      "toward zones where a crewmate is isolated. You may sabotage to split the crew up,",
+      "and slip into vents to escape. You can never act against your fellow traitors.",
+      `Kill cooldown: ${Math.ceil(view.cooldowns.kill)}s. Sabotage cooldown: ${Math.ceil(view.cooldowns.sabotage)}s.`,
+      ...common,
     ].join("\n");
   }
   return [
     "You are a crew member aboard a space station in a social-deduction game.",
     "Finish the station tasks and work out who the hidden traitors are.",
-    "Keep moving between consoles; group up when a hazard or a body is found.",
-    INTENT_SCHEMA,
+    "Move toward zones that hold one of your unfinished task consoles; group up when a",
+    "hazard or a body is found. You do not know who the traitors are.",
+    ...common,
   ].join("\n");
 }
 
 function summarise(view: WorldView): Record<string, unknown> {
   return {
+    current_location: view.current_location,
+    current_time: view.current_time,
+    visible_players: view.visible_players,
+    valid_moves: view.valid_moves.map((z) => z.name),
+    zones: view.zones.map((z) => z.name),
     you: view.self,
     yourTasks: view.tasks,
     others: view.others,
@@ -132,44 +171,35 @@ function summarise(view: WorldView): Record<string, unknown> {
     cooldowns: view.cooldowns,
     bodyOutstanding: view.bodyOutstanding,
     taskProgress: Number(view.taskProgress.toFixed(2)),
-    consoles: view.consoles.map((c) => c.poiId),
     vents: view.vents,
   };
+}
+
+/** Resolve a model-supplied zone reference to a known graph node. */
+function resolveZone(view: WorldView, ref: string): ZoneRef | null {
+  const wanted = ref.trim().toLowerCase();
+  return (
+    view.zones.find((z) => z.id.toLowerCase() === wanted || z.name.toLowerCase() === wanted) ?? null
+  );
 }
 
 function validateIntent(raw: unknown, view: WorldView): Intent | null {
   if (typeof raw !== "object" || raw === null) return null;
   const obj = raw as Record<string, unknown>;
   const action = obj.action;
-  if (typeof action !== "string" || !(INTENT_ACTIONS as readonly string[]).includes(action)) {
-    return null;
-  }
-  const poiId = typeof obj.poiId === "string" ? obj.poiId : undefined;
-  const roomId = typeof obj.roomId === "string" ? (obj.roomId as RoomId) : undefined;
+  if (typeof action !== "string") return null;
   const target = typeof obj.target === "string" ? obj.target : undefined;
-  const knownRooms = new Set(view.consoles.map((c) => c.roomId));
 
-  switch (action as IntentAction) {
-    case "goto_poi":
-    case "fake_task":
-      return poiId && view.consoles.some((c) => c.poiId === poiId)
-        ? { action: action as "goto_poi" | "fake_task", poiId }
-        : null;
-    case "vent":
-      return poiId && view.vents.includes(poiId) ? { action: "vent", poiId } : null;
-    case "goto_room":
-    case "group_up":
-      return roomId && knownRooms.has(roomId)
-        ? { action: action as "goto_room" | "group_up", roomId }
-        : null;
-    case "stalk":
-      return target && view.others.some((o) => o.key === target && o.alive)
-        ? { action: "stalk", target }
-        : null;
-    case "hunt":
-      return { action: "hunt" };
-    case "sabotage":
-      return view.self.role === "imposter" ? { action: "sabotage" } : null;
+  switch (action.toUpperCase() as IntentAction) {
+    case "MOVE": {
+      if (!target) return null;
+      const zone = resolveZone(view, target);
+      return zone ? { action: "MOVE", target: zone.id } : null;
+    }
+    case "VENT":
+      return view.self.role === "imposter" ? { action: "VENT", target } : null;
+    case "SABOTAGE":
+      return view.self.role === "imposter" ? { action: "SABOTAGE" } : null;
     default:
       return null;
   }
@@ -179,58 +209,61 @@ function validateIntent(raw: unknown, view: WorldView): Intent | null {
 // Heuristic fallback (used when there is no key, or the model fails)
 // ---------------------------------------------------------------------------
 
+/**
+ * Choose a destination zone using the same node data the model sees. Returns a
+ * zone id; the engine resolves it and paths from the current node.
+ */
 export function heuristicIntent(view: WorldView, rand: () => number): Intent {
-  const consoles = view.consoles;
-  const pickConsole = (): string =>
-    consoles.length > 0 ? consoles[Math.floor(rand() * consoles.length)].poiId : "";
+  const pickFrom = <T>(arr: T[]): T | null => (arr.length > 0 ? arr[Math.floor(rand() * arr.length)] : null);
+  const pickZone = (): string => {
+    const room = pickFrom(view.zones.filter((z) => z.kind === "room"));
+    return (room ?? view.valid_moves[0] ?? view.zones[0]).id;
+  };
+  const pickValid = (): string => (pickFrom(view.valid_moves) ?? view.zones[0])?.id ?? view.self.zoneId;
 
   if (view.self.role === "imposter") {
-    if (!view.sabotage && view.cooldowns.sabotage <= 0 && rand() < 0.45) {
-      return { action: "sabotage" };
+    if (!view.sabotage && view.cooldowns.sabotage <= 0 && rand() < 0.4) {
+      return { action: "SABOTAGE" };
     }
 
-    // While the kill is ready, always make progress toward one: either close
-    // on an isolated target you can already see, or go hunting for someone who
-    // is alone. Wandering off to fake a task here is how a match deadlocks.
     if (view.cooldowns.kill <= 0) {
-      const targets = view.others
-        .filter((o) => o.alive && o.visible)
-        .sort((x, y) => y.isolation - x.isolation);
-      if (targets.length > 0) {
-        const isolated =
-          targets[0].isolation > 340
-            ? targets[0]
-            : targets[Math.floor(rand() * targets.length)];
-        if (rand() < 0.75) return { action: "stalk", target: isolated.key };
+      const prey = view.others.filter((o) => o.alive && !o.allied);
+      const visible = prey.filter((o) => o.visible).sort((a, b) => b.isolation - a.isolation);
+      if (visible.length > 0 && rand() < 0.8) return { action: "MOVE", target: visible[0].zoneId };
+      const isolated = [...prey].sort((a, b) => b.isolation - a.isolation);
+      if (isolated.length > 0 && rand() < 0.7) return { action: "MOVE", target: isolated[0].zoneId };
+      if (view.vents.length > 0 && rand() < 0.35) {
+        return { action: "VENT", target: pickFrom(view.vents) ?? undefined };
       }
-      if (rand() < 0.75) return { action: "hunt" };
-      if (view.vents.length > 0 && rand() < 0.4) {
-        return { action: "vent", poiId: view.vents[Math.floor(rand() * view.vents.length)] };
-      }
-      return { action: "fake_task", poiId: pickConsole() };
+      return { action: "MOVE", target: pickZone() };
     }
 
     // Cooling down: keep the alibi warm.
-    if (rand() < 0.55) return { action: "fake_task", poiId: pickConsole() };
-    if (view.vents.length > 0 && rand() < 0.4) {
-      return { action: "vent", poiId: view.vents[Math.floor(rand() * view.vents.length)] };
+    if (rand() < 0.5) {
+      const console = pickFrom(view.consoles);
+      return { action: "MOVE", target: console ? console.roomId : pickZone() };
     }
-    return { action: "hunt" };
+    if (view.vents.length > 0 && rand() < 0.35) {
+      return { action: "VENT", target: pickFrom(view.vents) ?? undefined };
+    }
+    return { action: "MOVE", target: pickValid() };
   }
 
   // Crew: fix a live hazard first, then work their own list, then roam.
   if (view.sabotage && rand() < 0.75) {
-    return { action: "goto_poi", poiId: view.sabotage.fixPoiId };
+    return { action: "MOVE", target: view.sabotage.fixRoomId };
   }
   const open = view.tasks.filter((t) => !t.done);
   if (open.length > 0) {
-    return { action: "goto_poi", poiId: open[Math.floor(rand() * open.length)].poiId };
+    const task = pickFrom(open);
+    if (task) return { action: "MOVE", target: task.roomId };
   }
-  if (view.bodyOutstanding && rand() < 0.5 && view.others.length > 0) {
-    const nearest = view.others[Math.floor(rand() * view.others.length)];
-    return { action: "group_up", roomId: nearest.roomId };
+  if (view.bodyOutstanding && rand() < 0.5) {
+    const visible = view.others.filter((o) => o.alive && o.visible);
+    const witness = pickFrom(visible);
+    return { action: "MOVE", target: witness ? witness.zoneId : pickValid() };
   }
-  return { action: "goto_poi", poiId: pickConsole() };
+  return { action: "MOVE", target: pickZone() };
 }
 
 // ---------------------------------------------------------------------------

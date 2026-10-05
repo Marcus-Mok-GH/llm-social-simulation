@@ -64,6 +64,16 @@ import {
 } from "./map";
 import { buildNavGrid, type NavGrid } from "./navigation";
 import {
+  buildZoneGraph,
+  formatClock,
+  standPoint,
+  zoneAtPoint,
+  zoneByRef,
+  zoneNeighbors,
+  type Zone,
+  type ZoneGraph,
+} from "./zones";
+import {
   bump,
   createMind,
   decay,
@@ -161,6 +171,8 @@ export interface Actor {
   kind: EntityKind;
   isPlayer: boolean;
   alive: boolean;
+  /** Node-graph zone the actor currently occupies (PLAN.md step 1). */
+  zoneId: string;
   entity: Player | Crewmate | Imposter;
   mind: Mind;
   /** Model endpoint for this agent only. `null` on the human and with no key. */
@@ -277,6 +289,8 @@ export interface EngineOptions {
 export class GameEngine {
   readonly map: GameMap;
   readonly grid: NavGrid;
+  /** The spatial zone graph every actor is located within. */
+  readonly zones: ZoneGraph;
   readonly vis: VisibilityGrid;
   private readonly los: (ax: number, ay: number, bx: number, by: number) => boolean;
   private readonly rng: Rng;
@@ -331,6 +345,7 @@ export class GameEngine {
   constructor(opts: EngineOptions = {}) {
     this.map = opts.map ?? DEFAULT_MAP;
     this.grid = buildNavGrid(this.map);
+    this.zones = buildZoneGraph(this.map);
     this.vis = buildVisibilityGrid(this.map);
     this.los = makeLosTest(this.map);
     this.rng = makeRng(opts.seed ?? 20260410);
@@ -378,6 +393,7 @@ export class GameEngine {
         kind: "player",
         isPlayer: true,
         alive: true,
+        zoneId: "",
         entity: this.player,
         mind: playerMind,
         cfg: null,
@@ -422,7 +438,16 @@ export class GameEngine {
       (playerRole === "crew" ? PLAYER_TASKS : 0) + AI_CREW * TASKS_PER_CREW;
 
     revealAround(this.vis, this.player.x, this.player.y, 260);
+    this.refreshZones();
     this.note("Role assigned. Deck K7 is live.");
+  }
+
+  /** Recompute every living actor's zone from its world position. */
+  private refreshZones(): void {
+    for (const a of this.actors) {
+      if (!a.alive) continue;
+      a.zoneId = zoneAtPoint(this.zones, this.map, a.entity.x, a.entity.y).id;
+    }
   }
 
   /**
@@ -469,6 +494,7 @@ export class GameEngine {
       kind: role === "crew" ? "crew" : "imposter",
       isPlayer: false,
       alive: true,
+      zoneId: "",
       entity,
       mind: createMind(key, role),
       cfg: this.modelFor(index),
@@ -891,6 +917,15 @@ export class GameEngine {
 
   private buildView(a: Actor): WorldView {
     const selfRoom = roomAt(this.map, a.entity.x, a.entity.y);
+    const zone = zoneAtPoint(this.zones, this.map, a.entity.x, a.entity.y);
+    const neighborIds = new Set(zoneNeighbors(this.zones, zone.id).map((z) => z.id));
+    const ref = (z: Zone) => ({
+      id: z.id,
+      name: z.name,
+      kind: z.kind,
+      adjacent: neighborIds.has(z.id),
+    });
+
     const consoles = this.map.pointsOfInterest
       .filter((p) => p.kind === "task")
       .map((p) => ({
@@ -904,15 +939,20 @@ export class GameEngine {
       .filter((o) => o !== a)
       .map((o) => {
         const room = roomAt(this.map, o.entity.x, o.entity.y);
+        const ozone = zoneAtPoint(this.zones, this.map, o.entity.x, o.entity.y);
         return {
           key: o.key,
           name: o.name,
           roomId: room.id,
           roomName: room.name,
+          zoneId: ozone.id,
+          zoneName: ozone.name,
           alive: o.alive,
           visible: o.alive && this.visible(a, o.entity.x, o.entity.y),
           /** Distance from this actor to its nearest other companion. */
           isolation: o.alive ? this.isolationOf(o, a) : 0,
+          /** A fellow traitor is never a target or a suspect. */
+          allied: a.mind.allies.includes(o.key),
         };
       });
 
@@ -931,7 +971,15 @@ export class GameEngine {
         roomId: selfRoom.id,
         roomName: selfRoom.name,
         alive: a.alive,
+        zoneId: zone.id,
+        zoneName: zone.name,
       },
+      // --- serialized node-graph snapshot (PLAN.md step 2) ---
+      current_location: zone.name,
+      current_time: formatClock(this.time),
+      visible_players: others.filter((o) => o.alive && o.visible).map((o) => o.name),
+      valid_moves: zoneNeighbors(this.zones, zone.id).map(ref),
+      zones: this.zones.order.map((id) => ref(this.zones.zones[id])),
       tasks: a.tasks.map((t) => ({
         poiId: t.poiId,
         label: t.label,
@@ -1015,85 +1063,73 @@ export class GameEngine {
     this.applyIntent(a, heuristicIntent(view, () => this.rng.next()));
   }
 
+  /**
+   * Translate the model's node-graph decision into physical movement. `MOVE`
+   * resolves a destination zone and lets A* walk the sprite to it; `VENT` and
+   * `SABOTAGE` are the traitor's engine-owned abilities.
+   */
   private applyIntent(a: Actor, intent: Intent): void {
+    if (intent.action === "SABOTAGE") {
+      if (a.role === "imposter") this.triggerSabotage();
+      return;
+    }
+
+    if (intent.action === "VENT") {
+      if (a.kind !== "imposter") return;
+      const imp = a.entity as Imposter;
+      const requested =
+        intent.target &&
+        this.map.pointsOfInterest.some((p) => p.id === intent.target && p.kind === "vent")
+          ? intent.target
+          : null;
+      const vent = requested ?? nearestPoi(this.map, "vent", imp.x, imp.y)?.id ?? null;
+      if (vent) imposterSeekVent(imp, this.map, this.grid, vent);
+      return;
+    }
+
+    const zone = zoneByRef(this.zones, intent.target);
+    if (!zone) return;
+
     if (a.kind === "crew") {
       const c = a.entity as Crewmate;
-      switch (intent.action) {
-        case "goto_poi":
-        case "fake_task":
-          crewmateGotoPoi(c, this.map, this.grid, intent.poiId);
-          break;
-        case "goto_room":
-        case "group_up": {
-          const room = this.map.rooms.find((r) => r.id === intent.roomId);
-          if (room) crewmateGotoPoint(c, this.grid, room.x + room.w / 2, room.y + room.h / 2);
-          break;
-        }
-        default:
-          // Crew have no business stalking or venting.
-          break;
+      // Productive movement: if this zone holds a console the agent still owes
+      // work at, path straight to that console so arrival starts the task.
+      const owed = zone.taskPoiIds.find((id) =>
+        a.tasks.some((t) => t.poiId === id && !t.done),
+      );
+      if (owed) {
+        crewmateGotoPoi(c, this.map, this.grid, owed);
+        return;
       }
+      const pt = standPoint(this.map, zone);
+      crewmateGotoPoint(c, this.grid, pt.x, pt.y);
       return;
     }
 
     if (a.kind !== "imposter") return;
     const imp = a.entity as Imposter;
 
-    switch (intent.action) {
-      case "stalk": {
-        const target = this.actor(intent.target);
-        if (!target || !target.alive) break;
-        if (target.kind === "crew") {
-          imposterStalk(imp, this.grid, this.crewmates, (target.entity as Crewmate).id);
-        } else {
-          imposterGotoPoint(imp, this.grid, target.entity.x, target.entity.y);
-        }
-        break;
-      }
-      case "hunt": {
-        // Head for whoever is currently most alone — that is the only kill
-        // that cannot be seen from the next room over.
-        const prey = this.living("crew");
-        if (prey.length === 0) break;
-        let pick = prey[0];
-        let pickIso = -1;
-        for (const p of prey) {
-          const iso = this.isolationOf(p, a);
-          if (iso > pickIso) {
-            pickIso = iso;
-            pick = p;
-          }
-        }
-        if (pick.kind === "crew") {
-          imposterStalk(imp, this.grid, this.crewmates, (pick.entity as Crewmate).id);
-        } else {
-          imposterGotoPoint(imp, this.grid, pick.entity.x, pick.entity.y);
-        }
-        break;
-      }
-      case "fake_task":
-        imposterFakeTask(imp, this.map, this.grid, intent.poiId);
-        break;
-      case "vent":
-        imposterSeekVent(imp, this.map, this.grid, intent.poiId);
-        break;
-      case "sabotage":
-        this.triggerSabotage();
-        break;
-      case "goto_room":
-      case "group_up": {
-        const room = this.map.rooms.find((r) => r.id === intent.roomId);
-        if (room) imposterGotoPoint(imp, this.grid, room.x + room.w / 2, room.y + room.h / 2);
-        break;
-      }
-      case "goto_poi": {
-        const poi = this.map.pointsOfInterest.find((p) => p.id === intent.poiId);
-        if (poi) imposterGotoPoint(imp, this.grid, poi.x, poi.y);
-        break;
-      }
-      default:
-        break;
+    // Chase an AI crewmate who is currently in the destination zone.
+    const prey = this.actors.find(
+      (o) => o.kind === "crew" && o.alive && o.zoneId === zone.id,
+    );
+    if (prey) {
+      imposterStalk(imp, this.grid, this.crewmates, (prey.entity as Crewmate).id);
+      return;
     }
+    // The human player is not a Crewmate, so walk at their position directly.
+    const human = this.playerActor;
+    if (human.alive && human.role === "crew" && human.zoneId === zone.id) {
+      imposterGotoPoint(imp, this.grid, human.entity.x, human.entity.y);
+      return;
+    }
+    // Otherwise stand at a console in the zone for cover, or just walk there.
+    if (zone.taskPoiIds.length > 0) {
+      imposterFakeTask(imp, this.map, this.grid, zone.taskPoiIds[0]);
+      return;
+    }
+    const pt = standPoint(this.map, zone);
+    imposterGotoPoint(imp, this.grid, pt.x, pt.y);
   }
 
   // -- reporting -----------------------------------------------------------
@@ -1609,6 +1645,9 @@ export class GameEngine {
       return actor?.alive;
     });
     for (const i of livingImps) updateImposter(this.map, this.grid, i, livingCrew, dt);
+
+    // Keep the zone graph in sync with where everyone physically is.
+    this.refreshZones();
 
     for (const a of this.actors) {
       if (!a.alive) continue;
