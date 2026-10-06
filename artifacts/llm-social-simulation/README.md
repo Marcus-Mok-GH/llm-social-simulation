@@ -10,7 +10,7 @@ to trust, and **argue and vote** in meetings.
 
 | System | Notes |
 |---|---|
-| Map & renderer | The official Skeld artwork as the deck, Canvas 2D, camera-fit, A\* navigation grid |
+| Map & renderer | The official Skeld artwork as the deck, Canvas 2D, player-following camera at fixed zoom, A\* navigation grid |
 | **Vision fog** | Ray-cast visibility polygon + persistent "explored" memory, with wall occlusion |
 | Player | WASD movement, wall collision, contextual actions, spectator mode when dead |
 | **Tasks** | Per-agent task lists, shared station bar, two playable minigames (wiring, calibration) |

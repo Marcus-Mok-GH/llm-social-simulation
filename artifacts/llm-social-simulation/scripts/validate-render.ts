@@ -10,7 +10,12 @@ import { createCrewmates } from "../src/game/crewmate";
 import { createImposters } from "../src/game/imposter";
 import { UMBRA_DECK_MAP as map } from "../src/game/map";
 import { createPlayer } from "../src/game/player";
-import { drawMap } from "../src/game/render/renderMap";
+import {
+  CAM_ZOOM,
+  computeFollowTransform,
+  computeTransform,
+  drawMap,
+} from "../src/game/render/renderMap";
 import { buildVisibilityGrid, castVision } from "../src/game/vision";
 
 function makeCtx(calls: string[]): CanvasRenderingContext2D {
@@ -156,6 +161,91 @@ if (count(fogged, "fill") <= count(mapCalls, "fill")) {
 }
 if (polygon.length !== 360 * 2) {
   console.error(`expected 360 vision rays, got ${polygon.length / 2}`);
+  process.exit(1);
+}
+
+// --- Pass 6: the player-following camera ------------------------------------
+// The follow transform must zoom in over the whole-deck fit, keep the player
+// centred when there is room to do so, and clamp at the deck edges instead of
+// panning into the void. drawMap must route the fog polygon through the same
+// transform as the world, so the lit region stays glued to the player.
+let followFail = 0;
+const checkFollow = (cond: boolean, msg: string): void => {
+  if (!cond) {
+    followFail++;
+    console.error(`  ✗ ${msg}`);
+  }
+};
+
+const baseScale = computeTransform(map, 960, 600).scale;
+const centre = computeFollowTransform(map, 960, 600, { x: map.width / 2, y: map.height / 2 });
+checkFollow(
+  Math.abs(centre.scale - baseScale * CAM_ZOOM) < 1e-9,
+  `camera zooms in exactly ${CAM_ZOOM}× the whole-deck fit`,
+);
+checkFollow(
+  Math.abs(centre.offsetX + (map.width / 2) * centre.scale - 480) < 1e-9 &&
+    Math.abs(centre.offsetY + (map.height / 2) * centre.scale - 300) < 1e-9,
+  "a centred target projects back to the screen centre",
+);
+
+const corner = computeFollowTransform(map, 960, 600, { x: 0, y: 0 });
+checkFollow(
+  Math.abs(corner.offsetX) < 1e-9,
+  "clamps at the west edge (no void left of the hull)",
+);
+checkFollow(
+  Math.abs(corner.offsetY) < 1e-9,
+  "clamps at the north edge",
+);
+const farCorner = computeFollowTransform(map, 960, 600, { x: map.width, y: map.height });
+checkFollow(
+  Math.abs(farCorner.offsetX + map.width * farCorner.scale - 960) < 1e-9,
+  "clamps at the east edge",
+);
+checkFollow(
+  Math.abs(farCorner.offsetY + map.height * farCorner.scale - 600) < 1e-9,
+  "clamps at the south edge",
+);
+const wide = computeFollowTransform(map, 4800, 600, { x: 123, y: 456 });
+checkFollow(
+  Math.abs(wide.offsetX + (map.width / 2) * wide.scale - 2400) < 1e-9,
+  "a view wider than the deck centres the X axis",
+);
+const zoomedOut = computeFollowTransform(map, 960, 600, { x: 123, y: 456 }, 0.5);
+checkFollow(
+  Math.abs(zoomedOut.scale - baseScale) < 1e-9,
+  "zoom below 1 clamps to the whole-deck fit",
+);
+
+const followed: string[] = [];
+try {
+  drawMap(makeCtx(followed), map, 960, 600, 1, {
+    background: artwork,
+    player,
+    crewmates,
+    imposters,
+    fog: { polygon, grid },
+    camera: { x: player.x, y: player.y },
+  });
+} catch (err) {
+  console.error("drawMap (follow camera) threw:", err);
+  process.exit(1);
+}
+const baseFogFills = count(withActors, "fill");
+checkFollow(
+  count(followed, "fill") > baseFogFills,
+  "follow-camera pass still fills the fog region",
+);
+// Headless runs have no DOM, so the explored layer is skipped and only the
+// deck artwork drawImage survives — assert that, not a browser-specific 2.
+checkFollow(count(followed, "drawImage") >= 1, "follow-camera pass still draws the deck artwork");
+checkFollow(
+  count(followed, "setTransform") >= 3,
+  "follow-camera pass issues world, screen and fog transforms",
+);
+if (followFail > 0) {
+  console.error(`follow-camera checks failed: ${followFail}`);
   process.exit(1);
 }
 

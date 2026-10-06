@@ -31,6 +31,10 @@ const POI_COLORS: Record<PointOfInterest["kind"], string> = {
  * where the leftover vertical space goes: 0.5 centres the map (desktop),
  * while a smaller value lifts it up so the HUD can sit above and the touch
  * controls below without covering the deck.
+ *
+ * This is the *whole-deck* view used while spectating (and as the fallback
+ * whenever no camera target is supplied); during play the follow transform
+ * below takes over.
  */
 export function computeTransform(
   map: GameMap,
@@ -42,6 +46,43 @@ export function computeTransform(
   const offsetX = (canvasW - map.width * scale) / 2;
   const offsetY = (canvasH - map.height * scale) * Math.min(1, Math.max(0, biasY));
   return { scale, offsetX, offsetY };
+}
+
+/**
+ * Fixed zoom factor of the player-following camera, as a multiplier over the
+ * whole-deck fit scale. 2 shows roughly half the deck's width — a few rooms
+ * around the player instead of the entire station.
+ */
+export const CAM_ZOOM = 2;
+
+/**
+ * Transform for the player-following camera: the whole-deck fit scale
+ * multiplied by a fixed zoom, centred on `target` (usually the human player)
+ * and clamped so the view never leaves the deck. Near an edge the player
+ * slides off-centre rather than the camera showing the void beyond the hull;
+ * where the zoomed window is larger than the deck along an axis (small
+ * screens), that axis falls back to centring for the same reason. A zoom
+ * below 1 is clamped to 1, which is exactly the whole-deck fit.
+ */
+export function computeFollowTransform(
+  map: GameMap,
+  canvasW: number,
+  canvasH: number,
+  target: { x: number; y: number },
+  zoom: number = CAM_ZOOM,
+): ViewTransform {
+  const scale = computeTransform(map, canvasW, canvasH).scale * Math.max(1, zoom);
+  const viewW = canvasW / scale;
+  const viewH = canvasH / scale;
+  const clampAxis = (t: number, view: number, extent: number): number =>
+    view >= extent ? extent / 2 : Math.min(extent - view / 2, Math.max(view / 2, t));
+  const cx = clampAxis(target.x, viewW, map.width);
+  const cy = clampAxis(target.y, viewH, map.height);
+  return {
+    scale,
+    offsetX: canvasW / 2 - cx * scale,
+    offsetY: canvasH / 2 - cy * scale,
+  };
 }
 
 function roundRect(
@@ -309,6 +350,14 @@ export interface FogLayer {
   grid: VisibilityGrid;
 }
 
+/** A world point the camera keeps centred, with an optional zoom override. */
+export interface CameraTarget {
+  x: number;
+  y: number;
+  /** Zoom multiplier over the whole-deck fit. Defaults to `CAM_ZOOM`. */
+  zoom?: number;
+}
+
 export interface Scene {
   /**
    * The official Skeld artwork, drawn stretched across the world rect as the
@@ -316,6 +365,12 @@ export interface Scene {
    * Absent (e.g. a headless run) the deck is simply the dark space backdrop.
    */
   background?: CanvasImageSource | null;
+  /**
+   * When present, the view follows this point at a fixed zoom instead of
+   * fitting the whole deck (GameStage passes the human player unless
+   * spectating, which keeps the full-station view).
+   */
+  camera?: CameraTarget | null;
   player?: Player | null;
   playerAlive?: boolean;
   crewmates?: Crewmate[];
@@ -345,7 +400,12 @@ export function drawMap(
   ctx.fillStyle = COLORS.space;
   ctx.fillRect(0, 0, cssW, cssH);
 
-  const t = computeTransform(map, cssW, cssH, scene.biasY);
+  // One transform drives everything below — artwork, POIs, actors, the
+  // screen-space labels and both fog layers — so the follow camera keeps the
+  // whole scene consistent by construction.
+  const t = scene.camera
+    ? computeFollowTransform(map, cssW, cssH, scene.camera, scene.camera.zoom)
+    : computeTransform(map, cssW, cssH, scene.biasY);
   const reveal = scene.revealRoles ?? false;
 
   ctx.setTransform(

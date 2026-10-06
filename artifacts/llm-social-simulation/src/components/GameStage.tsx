@@ -124,9 +124,10 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
       const touchLayout = coarse || window.innerWidth < 768;
       const byWidth = cssW * (UMBRA_DECK_MAP.height / UMBRA_DECK_MAP.width);
       // How much room the stage has from its top edge to the bottom of the
-      // viewport. On desktop the deck grows into all of it so the whole
-      // station is on screen at the largest size that fits without scrolling
-      // (computeTransform letterboxes the remainder).
+      // viewport. On desktop the deck grows into all of it at the largest size
+      // that fits without scrolling (computeTransform letterboxes the
+      // remainder) — this sizing backs the spectator full-deck view; during
+      // play the follow camera crops and zooms inside the same canvas.
       const docTop = wrap.getBoundingClientRect().top + window.scrollY;
       const fitH = Math.max(240, window.innerHeight - docTop - 16);
       let byLayout = byWidth;
@@ -182,8 +183,12 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
       drawMap(ctx, UMBRA_DECK_MAP, cssW, cssH, dpr, {
         biasY,
         background: bg.complete && bg.naturalWidth > 0 ? bg : null,
-        // A spectator watches the station itself: no avatar, and the fog gate
-        // below lifts so the whole deck (and everyone on it) is visible.
+        // The camera follows the human player at a fixed zoom, re-read every
+        // frame so it tracks movement and clamps at the deck edges. A
+        // spectator watches the station itself: no camera target, no avatar,
+        // and the fog gate below lifts so the whole deck (and everyone on it)
+        // is visible.
+        camera: engine.spectator ? null : { x: engine.player.x, y: engine.player.y },
         player: engine.spectator ? null : engine.player,
         playerAlive: engine.playerActor.alive,
         crewmates: engine.crewmates.filter((c) => alive.has(c)),
