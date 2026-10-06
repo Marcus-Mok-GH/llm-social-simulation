@@ -91,9 +91,13 @@ function view(role: "crew" | "imposter"): WorldView {
     ],
     system_message: null,
     others: [
-      { key: "crew:1", name: "VEGA", roomId: "cafeteria", roomName: "Cafeteria", zoneId: "cafeteria", zoneName: "Cafeteria", alive: true, visible: true, isolation: 420, allied: false },
-      { key: "crew:2", name: "JUNO", roomId: "medbay", roomName: "MedBay", zoneId: "medbay", zoneName: "MedBay", alive: true, visible: false, isolation: 90, allied: false },
-      { key: "imp:1", name: "VEX", roomId: "storage", roomName: "Storage", zoneId: "storage", zoneName: "Storage", alive: true, visible: false, isolation: 300, allied: role === "imposter" },
+      // Sight only: VEGA is in the room with the agent. JUNO and VEX are not in
+      // the snapshot because the agent cannot see them.
+      { key: "crew:1", name: "VEGA", roomId: "cafeteria", roomName: "Cafeteria", zoneId: "cafeteria", zoneName: "Cafeteria", isolation: 420, allied: false },
+    ],
+    known_allies: role === "imposter" ? ["VEX"] : [],
+    last_seen: [
+      { key: "crew:2", name: "JUNO", zoneId: "medbay", zoneName: "MedBay", ago: 25 },
     ],
     history: [
       "[00:40 sighted] Saw VEGA in Cafeteria not long ago.",

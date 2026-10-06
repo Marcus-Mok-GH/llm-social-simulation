@@ -2,16 +2,18 @@
  * Headless simulation of the AI imposters alongside crewmates. Verifies they:
  *  - navigate using pathfinding and stay walkable / in bounds
  *  - never perform crewmate tasks (no "working" state)
- *  - follow crewmates (stalking / observing)
+ *  - fake work at consoles for an alibi
  *  - use vent POIs to travel, emerging at a different vent
  *
  * Run: bun scripts/validate-imposters.ts
  */
 import { canStand } from "../src/game/collision";
 import { createCrewmates, crewmateWorkAt, updateCrewmate } from "../src/game/crewmate";
+import { BASE_VISION, KILL_COOLDOWN } from "../src/game/engine";
 import { createImposters, updateImposter, type ImposterState } from "../src/game/imposter";
 import { UMBRA_DECK_MAP as map } from "../src/game/map";
 import { buildNavGrid } from "../src/game/navigation";
+import { makeLosTest } from "../src/game/vision";
 
 let failures = 0;
 function check(cond: boolean, msg: string): void {
@@ -21,12 +23,13 @@ function check(cond: boolean, msg: string): void {
   }
 }
 
-const ALLOWED: ImposterState[] = ["idle", "stalking", "observing", "seeking_vent", "venting"];
+const ALLOWED: ImposterState[] = ["idle", "walking", "faking", "seeking_vent", "venting"];
 const vents = map.pointsOfInterest.filter((p) => p.kind === "vent");
 check(vents.length >= 2, `map has at least 2 vent POIs (got ${vents.length})`);
 console.log(`Vent POIs available: ${vents.length}`);
 
 const grid = buildNavGrid(map);
+const los = makeLosTest(map);
 const crew = createCrewmates(map, 4, 7);
 const imps = createImposters(map, 2, 101);
 
@@ -36,7 +39,8 @@ for (const imp of imps) {
 }
 
 const dt = 1 / 60;
-const ticks = 60 * 120; // 120 simulated seconds
+const ticks = 60 * 240; // 240 simulated seconds — long enough that both
+// imposters get unwatched moments to vent under the honest sight-only rule.
 
 const stateTime = imps.map(() => new Map<string, number>());
 const travel = imps.map(() => 0);
@@ -46,7 +50,6 @@ let allValid = true;
 let crewEverWorked = false;
 let ventJumps = 0;
 let maxVentJump = 0;
-let closestObserve = Infinity;
 
 for (let t = 0; t < ticks; t++) {
   for (const c of crew) {
@@ -65,7 +68,13 @@ for (let t = 0; t < ticks; t++) {
     const px = imp.x;
     const py = imp.y;
     const before = imp.state;
-    updateImposter(map, grid, imp, crew, dt);
+    // Same rule the engine referee applies: venting is only offered when no
+    // crewmate is within sight (range + line of sight), so the state machine
+    // is exercised exactly as it behaves in a real match.
+    const watched = crew.some(
+      (c) => Math.hypot(c.x - imp.x, c.y - imp.y) <= BASE_VISION && los(imp.x, imp.y, c.x, c.y),
+    );
+    updateImposter(map, grid, imp, !watched, dt);
 
     if (!canStand(map, imp.x, imp.y, imp.radius)) allValid = false;
     if (imp.x < 0 || imp.x > map.width || imp.y < 0 || imp.y > map.height) allValid = false;
@@ -81,13 +90,6 @@ for (let t = 0; t < ticks; t++) {
     } else {
       travel[imp.id] += Math.hypot(imp.x - px, imp.y - py);
     }
-
-    if (imp.state === "observing") {
-      const target = crew.find((c) => c.id === imp.targetCrewmateId);
-      if (target) {
-        closestObserve = Math.min(closestObserve, Math.hypot(target.x - imp.x, target.y - imp.y));
-      }
-    }
   }
 }
 
@@ -102,13 +104,11 @@ check(ventJumps >= 2, `observed vent teleports (${ventJumps})`);
 check(maxVentJump > 150, `vent travel moved the imposter a meaningful distance (max ${Math.round(maxVentJump)}u)`);
 
 for (const imp of imps) {
-  const stalking = (stateTime[imp.id].get("stalking") ?? 0) + (stateTime[imp.id].get("observing") ?? 0);
-  check(stalking > 3, `${imp.name} spent time stalking/observing (${stalking.toFixed(1)}s)`);
+  const faking = stateTime[imp.id].get("faking") ?? 0;
+  check(faking > 3, `${imp.name} spent time faking tasks for an alibi (${faking.toFixed(1)}s)`);
   check(travel[imp.id] > 500, `${imp.name} travelled via movement (${Math.round(travel[imp.id])}u)`);
   check(imp.ventCount >= 1, `${imp.name} personally used a vent (${imp.ventCount})`);
 }
-
-check(closestObserve <= 140, `imposters got close to a crewmate while observing (${Math.round(closestObserve)}u)`);
 
 console.log("\nState time by imposter (seconds):");
 for (const imp of imps) {
@@ -116,7 +116,6 @@ for (const imp of imps) {
   console.log(`  ${imp.name.padEnd(6)} vents=${imp.ventCount}  walked=${Math.round(travel[imp.id])}u  ${parts}`);
 }
 console.log(`\nTotal vent travels: ${totalVents}  |  max vent jump: ${Math.round(maxVentJump)}u`);
-console.log(`Closest observe distance: ${Math.round(closestObserve)}u`);
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);

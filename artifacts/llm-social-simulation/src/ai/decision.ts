@@ -44,6 +44,10 @@ export interface ZoneRef {
   adjacent: boolean;
 }
 
+/**
+ * A player the agent can currently see — line of sight within vision range.
+ * Nobody outside that circle ever appears in the snapshot.
+ */
 export interface ActorView {
   key: string;
   name: string;
@@ -51,10 +55,7 @@ export interface ActorView {
   roomName: string;
   zoneId: string;
   zoneName: string;
-  alive: boolean;
-  /** True only when the observer currently has line of sight to them. */
-  visible: boolean;
-  /** Distance from them to their nearest other companion — high means alone. */
+  /** Distance from them to the nearest other player in sight — high means alone. */
   isolation: number;
   /** True for a fellow traitor: never a target, never a suspect. */
   allied: boolean;
@@ -116,7 +117,16 @@ export interface WorldView {
   interactables: Interactable[];
   /** The engine's verdict on the agent's last rejected action, if any. */
   system_message: string | null;
+  /** Every player the agent can currently see — and nobody else. */
   others: ActorView[];
+  /** Fellow traitors by name; team knowledge an imposter always has. */
+  known_allies: string[];
+  /**
+   * Where the agent itself last saw each player — its own sighting memory,
+   * oldest information first by recency. Stale on purpose: it is what the
+   * agent remembers, never a live position.
+   */
+  last_seen: { key: string; name: string; zoneId: string; zoneName: string; ago: number }[];
   /**
    * Every notable event this agent has observed this match, oldest first. This
    * is the complete match log — no event is ever dropped, so the opening of the
@@ -150,6 +160,7 @@ export interface WorldView {
   }[];
   sabotage: { kind: string; secondsLeft: number; fixPoiId: string; fixRoomId: RoomId } | null;
   cooldowns: { kill: number; sabotage: number };
+  /** True only while the agent can currently see an unreported body. */
   bodyOutstanding: boolean;
   taskProgress: number;
 }
@@ -218,7 +229,8 @@ function systemPrompt(view: WorldView): string {
       "Your goal is to eliminate crewmates secretly while never looking suspicious.",
       "You kill only by standing close to a lone crewmate with nobody watching, so move",
       "toward zones where a crewmate is isolated. You may sabotage to split the crew up,",
-      "and slip into vents to escape. You can never act against your fellow traitors.",
+      "and slip into vents to escape.",
+      `Your fellow traitors: ${view.known_allies.length > 0 ? view.known_allies.join(", ") : "none"}. You can never act against them.`,
       `Kill cooldown: ${Math.ceil(view.cooldowns.kill)}s. Sabotage cooldown: ${Math.ceil(view.cooldowns.sabotage)}s.`,
       ...common,
     ].join("\n");
@@ -242,6 +254,8 @@ function summarise(view: WorldView): Record<string, unknown> {
     you: view.self,
     yourTasks: view.tasks,
     others: view.others,
+    known_allies: view.known_allies,
+    last_seen: view.last_seen,
     your_history: view.history,
     your_decisions: view.decision_history,
     your_goal: view.your_goal,
@@ -330,24 +344,31 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
     }
 
     if (view.cooldowns.kill <= 0) {
-      const prey = view.others.filter((o) => o.alive && !o.allied);
-      const visible = prey.filter((o) => o.visible).sort((a, b) => b.isolation - a.isolation);
-      if (visible.length > 0 && rand() < 0.8)
-        return { action: "MOVE", target: visible[0].key, reasoning: "prey is visible and alone" };
-      const isolated = [...prey].sort((a, b) => b.isolation - a.isolation);
-      if (isolated.length > 0 && rand() < 0.7)
-        return {
-          action: "MOVE",
-          target: isolated[0].key,
-          reasoning: "close on the most isolated crewmate",
-        };
-      if (view.vents.length > 0 && rand() < 0.35) {
+      // Everyone in `others` is currently in sight — the view never contains a
+      // player the agent cannot see, so there is no off-screen hunting.
+      const prey = view.others.filter((o) => !o.allied).sort((a, b) => b.isolation - a.isolation);
+      if (prey.length > 0 && rand() < 0.8)
+        return { action: "MOVE", target: prey[0].key, reasoning: "prey is visible and alone" };
+      // Venting only when nobody is in sight: vision is symmetric, so an
+      // imposter that cannot see the crew cannot be seen by them either. A
+      // witnessed vent is a confession.
+      if (view.others.length === 0 && view.vents.length > 0 && rand() < 0.35) {
         return {
           action: "VENT",
           target: pickFrom(view.vents) ?? undefined,
           reasoning: "reposition unseen",
         };
       }
+      // No one in sight: hunt where the agent itself last saw someone. That is
+      // memory, not tracking — by the time it arrives the trail may be cold.
+      const trail = view.last_seen.filter((s) => !view.others.some((o) => o.key === s.key));
+      const lead = pickFrom(trail.slice(0, 3));
+      if (lead)
+        return {
+          action: "MOVE",
+          target: lead.zoneId,
+          reasoning: `head to where I last saw ${lead.name}`,
+        };
       return { action: "MOVE", target: pickZone(), reasoning: "hunt while the kill is ready" };
     }
 
@@ -360,7 +381,7 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
         reasoning: "build an alibi while the kill recharges",
       };
     }
-    if (view.vents.length > 0 && rand() < 0.35) {
+    if (view.others.length === 0 && view.vents.length > 0 && rand() < 0.35) {
       return {
         action: "VENT",
         target: pickFrom(view.vents) ?? undefined,
@@ -400,14 +421,24 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
       reasoning: "a body needs reporting",
     };
 
+  // Crew that drift alone get picked off, and pairs are how bodies get found:
+  // when nobody is in sight, sometimes regroup toward the last person the
+  // agent itself saw (memory, not tracking).
+  if (view.others.length === 0 && rand() < 0.3) {
+    const lead = pickFrom(view.last_seen);
+    if (lead)
+      return { action: "MOVE", target: lead.zoneId, reasoning: `stay near ${lead.name}` };
+  }
+
   const open = view.tasks.filter((t) => !t.done);
   if (open.length > 0) {
     const next = pickFrom(open);
     if (next) return { action: "MOVE", target: next.poiId, reasoning: "next unfinished task" };
   }
   if (view.bodyOutstanding && rand() < 0.5) {
-    const visible = view.others.filter((o) => o.alive && o.visible);
-    const witness = pickFrom(visible);
+    // Only crew currently in sight can be regrouped with — the body itself is
+    // visible too, otherwise the agent would not know a body exists.
+    const witness = pickFrom(view.others);
     return {
       action: "MOVE",
       target: witness ? witness.zoneId : pickValid(),

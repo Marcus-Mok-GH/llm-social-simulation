@@ -51,7 +51,6 @@ import {
   imposterGotoPoint,
   imposterHalt,
   imposterSeekVent,
-  imposterStalk,
   updateImposter,
   type Imposter,
 } from "./imposter";
@@ -794,10 +793,17 @@ export class GameEngine {
         }
         noteSighting(obs.mind, tgt.key, room.id, tgt.entity.x, tgt.entity.y, t);
 
-        // Watching someone climb into a vent is the strongest possible tell.
+        // Watching someone climb into a vent is the strongest possible tell —
+        // but only the act itself counts: an imposter merely walking or standing
+        // near a grate is doing nothing wrong, so proximity alone must never
+        // brand them. Catch the climb-in (seeking_vent at the grate) or the
+        // imposter sitting in the pipe (venting).
         if (tgt.role === "imposter" && !obs.mind.ventsSeen.has(tgt.key)) {
+          const imp = tgt.entity as Imposter;
           const vent = nearestPoi(this.map, "vent", tgt.entity.x, tgt.entity.y);
-          if (vent && Math.hypot(vent.x - tgt.entity.x, vent.y - tgt.entity.y) < 46) {
+          const atGrate =
+            vent !== null && Math.hypot(vent.x - tgt.entity.x, vent.y - tgt.entity.y) < 30;
+          if ((imp.state === "venting" || (imp.state === "seeking_vent" && atGrate))) {
             obs.mind.ventsSeen.add(tgt.key);
             remember(obs.mind, {
               t,
@@ -1052,11 +1058,17 @@ export class GameEngine {
 
   // -- AI decisions --------------------------------------------------------
 
-  /** How alone `target` is: distance to the nearest other living actor. */
-  private isolationOf(target: Actor, exclude: Actor): number {
+  /**
+   * How alone a target looks to `observer`: distance from the target to the
+   * nearest other actor the observer can *also see*. Actors outside the
+   * observer's sight do not count, so isolation is judged only from what is in
+   * front of the agent — 9999 when nobody else is in view.
+   */
+  private isolationInView(target: Actor, observer: Actor): number {
     let best = Infinity;
     for (const other of this.actors) {
-      if (other === target || other === exclude || !other.alive) continue;
+      if (other === target || other === observer || !other.alive) continue;
+      if (!this.visible(observer, other.entity.x, other.entity.y)) continue;
       const d = Math.hypot(other.entity.x - target.entity.x, other.entity.y - target.entity.y);
       if (d < best) best = d;
     }
@@ -1171,9 +1183,7 @@ export class GameEngine {
     }
 
     return out;
-  }
-
-  private buildView(a: Actor): WorldView {
+  }  private buildView(a: Actor): WorldView {
     const selfRoom = roomAt(this.map, a.entity.x, a.entity.y);
     const zone = zoneAtPoint(this.zones, this.map, a.entity.x, a.entity.y);
     // The feedback is consumed exactly once, so it reaches the agent's next
@@ -1197,8 +1207,12 @@ export class GameEngine {
         roomName: roomAt(this.map, p.x, p.y).name,
       }));
 
+    // Eyes only: an agent perceives another actor only while it currently has
+    // line of sight to them. Live positions of unseen players — even who is
+    // alive at all — never enter the snapshot; the past comes from the agent's
+    // own memory, never from a god's-eye list.
     const others = this.actors
-      .filter((o) => o !== a)
+      .filter((o) => o !== a && o.alive && this.visible(a, o.entity.x, o.entity.y))
       .map((o) => {
         const room = roomAt(this.map, o.entity.x, o.entity.y);
         const ozone = zoneAtPoint(this.zones, this.map, o.entity.x, o.entity.y);
@@ -1209,14 +1223,33 @@ export class GameEngine {
           roomName: room.name,
           zoneId: ozone.id,
           zoneName: ozone.name,
-          alive: o.alive,
-          visible: o.alive && this.visible(a, o.entity.x, o.entity.y),
-          /** Distance from this actor to its nearest other companion. */
-          isolation: o.alive ? this.isolationOf(o, a) : 0,
+          /** How alone they look: nobody else in sight near them → 9999. */
+          isolation: this.isolationInView(o, a),
           /** A fellow traitor is never a target or a suspect. */
           allied: a.mind.allies.includes(o.key),
         };
       });
+
+    // Imposters always know their own team — table knowledge, not sight.
+    const known_allies =
+      a.role === "imposter" ? a.mind.allies.map((k) => this.names[k] ?? k) : [];
+
+    // The agent's own sighting memory: where it last saw each player, from
+    // moments it could actually see them. Deliberately stale — this is
+    // remembered perception, never a live position.
+    const last_seen = Object.entries(a.mind.lastSeen)
+      .filter(([key]) => key !== a.key)
+      .map(([key, seen]) => {
+        const z = zoneAtPoint(this.zones, this.map, seen.x, seen.y);
+        return {
+          key,
+          name: this.names[key] ?? key,
+          zoneId: z.id,
+          zoneName: z.name,
+          ago: Math.max(0, Math.round(this.time - seen.t)),
+        };
+      })
+      .sort((s1, s2) => s1.ago - s2.ago);
 
     // The whole match log, not a tail: every event this agent has observed,
     // timestamped, so it can reason from the opening seconds onward.
@@ -1247,7 +1280,8 @@ export class GameEngine {
       // --- serialized node-graph snapshot (PLAN.md step 2) ---
       current_location: zone.name,
       current_time: formatClock(this.time),
-      visible_players: others.filter((o) => o.alive && o.visible).map((o) => o.name),
+      // `others` is already sight-only, so these are the names of everyone in view.
+      visible_players: others.map((o) => o.name),
       valid_moves: zoneNeighbors(this.zones, zone.id).map(ref),
       zones: this.zones.order.map((id) => ref(this.zones.zones[id])),
       tasks: a.tasks.map((t) => ({
@@ -1262,6 +1296,8 @@ export class GameEngine {
       interactables: this.buildInteractables(a, zone),
       system_message: feedback,
       others,
+      known_allies,
+      last_seen,
       history,
       decision_history: decisionHistory,
       // Persistent self-context, so the agent reasons between iterations
@@ -1286,7 +1322,8 @@ export class GameEngine {
           }
         : null,
       cooldowns: { kill: a.killCooldown, sabotage: this.sabotageCooldown },
-      bodyOutstanding: this.bodies.length > 0,
+      // Sight, not omniscience: only a body this agent can currently see counts.
+      bodyOutstanding: this.bodies.some((b) => this.visible(a, b.x, b.y)),
       taskProgress: taskBarFraction({ total: this.taskTotal, complete: this.taskComplete }),
     };
   }
@@ -1379,13 +1416,21 @@ export class GameEngine {
     // A live hazard collapses everyone's decision lull: with the Skeld's long
     // cross-map runs, a 10-16s cadence means the crew arrives at the repair
     // panel with no time left to actually choose FIX.
+    //
+    // A traitor whose kill is off cooldown thinks just as fast: with the
+    // sight-only view it has to close distance on prey it can see, and a 7-11s
+    // cadence burns the whole ready window between decisions.
+    const imposterReady = a.role === "imposter" && a.killCooldown <= 0;
     const nextIn =
       this.sabotage && a.kind === "crew"
         ? this.rng.range(1.5, 3)
         : a.role === "imposter"
-          ? this.rng.range(7, 11)
+          ? imposterReady
+            ? this.rng.range(2, 4)
+            : this.rng.range(7, 11)
           : this.rng.range(10, 16);
-    a.nextDecisionAt = this.time + nextIn;    if (this.llmEnabled && a.cfg) {
+    a.nextDecisionAt = this.time + nextIn;
+    if (this.llmEnabled && a.cfg) {
       const seq = ++a.decisionSeq;
       a.pendingDecision = true;
       void intentWithModel(this.contextFor(a), view)
@@ -1535,13 +1580,9 @@ export class GameEngine {
     if (dest.kind === "poi") imposterGotoPoint(imp, this.grid, dest.poi.x, dest.poi.y);
     else if (dest.kind === "body") imposterGotoPoint(imp, this.grid, dest.body.x, dest.body.y);
     else if (dest.kind === "actor") {
-      // Walking to a crewmate the agent named is pursuit; the state machine
-      // keeps following them once the path runs out.
-      if (dest.actor.kind === "crew") {
-        imposterStalk(imp, this.grid, this.crewmates, (dest.actor.entity as Crewmate).id);
-      } else {
-        imposterGotoPoint(imp, this.grid, dest.actor.entity.x, dest.actor.entity.y);
-      }
+      // Walking to a named player is a one-shot approach to where they stand
+      // right now — the imposter never locks on or keeps pursuing them.
+      imposterGotoPoint(imp, this.grid, dest.actor.entity.x, dest.actor.entity.y);
     } else {
       const pt = standPoint(this.map, dest.zone);
       imposterGotoPoint(imp, this.grid, pt.x, pt.y);
@@ -2308,7 +2349,15 @@ export class GameEngine {
       const actor = this.actors.find((a) => a.entity === i);
       return actor?.alive;
     });
-    for (const i of livingImps) updateImposter(this.map, this.grid, i, livingCrew, dt);
+    for (const i of livingImps) {
+      // Venting is only safe when nobody is in sight: vision is symmetric, so
+      // an imposter that cannot see the crew cannot be seen by them either.
+      const imp = this.actors.find((a) => a.entity === i)!;
+      const watched = this.actors.some(
+        (o) => o.alive && o.role === "crew" && this.visible(imp, o.entity.x, o.entity.y),
+      );
+      updateImposter(this.map, this.grid, i, !watched, dt);
+    }
 
     // Keep the zone graph in sync with where everyone physically is.
     this.refreshZones();

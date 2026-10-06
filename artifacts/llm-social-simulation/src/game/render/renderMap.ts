@@ -262,23 +262,6 @@ function drawBody(
   ctx.restore();
 }
 
-/** Dashed link from a stalking imposter to its prey — analyst view only. */
-function drawStalkLink(
-  ctx: CanvasRenderingContext2D,
-  a: Imposter,
-  target: Crewmate,
-): void {
-  ctx.save();
-  ctx.setLineDash([5, 6]);
-  ctx.strokeStyle = "rgba(255, 77, 106, 0.45)";
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(target.x, target.y);
-  ctx.stroke();
-  ctx.restore();
-}
-
 // ---------------------------------------------------------------------------
 // Fog of war
 // ---------------------------------------------------------------------------
@@ -381,14 +364,6 @@ export function drawMap(
     ctx.fillRect(0, 0, map.width, map.height);
   }
   for (const poi of map.pointsOfInterest) drawPoi(ctx, poi);
-
-  if (reveal) {
-    for (const a of scene.imposters ?? []) {
-      if (a.state !== "stalking" && a.state !== "observing") continue;
-      const target = scene.crewmates?.find((c) => c.id === a.targetCrewmateId);
-      if (target) drawStalkLink(ctx, a, target);
-    }
-  }
 
   for (const b of scene.bodies ?? []) drawBody(ctx, b);
   for (const a of scene.crewmates ?? []) drawCrewmate(ctx, a);

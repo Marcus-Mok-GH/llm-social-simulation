@@ -45,20 +45,27 @@ kept out of the prompt entirely.
 
 `Engine.decide(a)` runs on a timer rather than every frame:
 
-- Imposters re-decide roughly every 7–11s, crew every 10–16s.
+- Imposters re-decide roughly every 7–11s — collapsing to 2–4s while their kill
+  is off cooldown, since the ready window is too short to burn on a lull. Crew
+  re-decide every 10–16s.
 - An agent that is already mid-task is **not** interrupted (re-pathing a crewmate
   that is standing at its console would cancel the work); a live sabotage is the
   one exception.
 - An agent chasing a body to report keeps that goal until it is close enough to
   touch, then falls through so it can emit `REPORT`.
 
-`buildView(a)` serializes what the model may know:
+`buildView(a)` serializes what the model may know — **eyes only**: the snapshot
+never contains anything outside the agent's line of sight.
 
 - `current_location` — the human-readable zone the agent is standing in
 - `valid_moves` — the **adjacent** zones it can step into
 - `zones` — the full station list, so multi-hop targets still resolve
-- plus `current_time`, `visible_players`, `interactables`, `suspicion`,
-  `recentMemory`, cooldowns, sabotage state and any `system_message`.
+- `visible_players` / `others` — only the actors currently in line of sight;
+  unseen players have no entry, no live position, room or isolation number.
+  `isolation` is judged from the observer's own view, and `bodyOutstanding` is
+  true only for a body the agent itself can see right now.
+- plus `current_time`, `interactables`, `suspicion`, `recentMemory`, cooldowns,
+  sabotage state and any `system_message`.
 
 ## 3. The model picks a destination zone (`src/ai/decision.ts`)
 
@@ -79,10 +86,10 @@ For a `MOVE` target, `zoneByRef` resolves the zone, then:
   - else if the zone holds a task console the agent still owes → path straight to
     it, so arrival starts the task
   - else → walk to `standPoint` (nearest walkable point to the zone centre)
-- **Imposter** (`imposterStalk` / `imposterGotoPoint` / `imposterFakeTask`):
-  - if an AI crewmate is in that zone → stalk it
-  - else if the human crew member is there → walk at their position directly
-  - else if the zone has a task console → walk there and fake work (alibi)
+- **Imposter** (`imposterGotoPoint` / `imposterFakeTask`):
+  - if the zone has a task console → walk there and fake work (alibi)
+  - a named player or point → a one-shot walk to where they stand right now;
+    the engine never locks onto a target (stalking was removed)
   - else → walk to `standPoint`
 
 ## 5. Physical walking (`navigation.ts`, `crewmate.ts`, `imposter.ts`)
@@ -104,7 +111,11 @@ The chosen world point is resolved with **A\*** over a navigation grid:
 
 - **`VENT`** (imposter only): `imposterSeekVent` walks the imposter to a vent,
   then after `VENT_TRAVEL` (1.2s) it is teleported to a *different* vent — the
-  fast-travel payoff.
+  fast-travel payoff. Venting is witness-safe by design: trips are only planned
+  when nobody is in the imposter's sight, the engine re-checks on every tick and
+  the trip is aborted at the grate if someone has walked into view, and
+  perception only brands a *witnessed act* (climbing in or sitting in the pipe)
+  — never mere proximity to a grate.
 - **Teleports** (meeting seating, vent travel) relocate actors directly, so
   anything that moves an actor must land it on walkable space — the engine uses
   `seatAt` / `nearestStandable` and keeps a safety-net snap for this.

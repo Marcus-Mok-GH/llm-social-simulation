@@ -81,8 +81,6 @@ const crewmates = createCrewmates(map, 3);
 crewmates[0].state = "working";
 crewmates[0].taskProgress = 0.5;
 const imposters = createImposters(map, 2);
-imposters[1].state = "stalking";
-imposters[1].targetCrewmateId = crewmates[1].id;
 
 const withActors: string[] = [];
 try {
@@ -100,8 +98,8 @@ if (count(withActors, "arc") <= count(mapCalls, "arc")) {
   console.error("drawMap did not draw the player body (arc count unchanged)");
   process.exit(1);
 }
-// Player + crew + imposters all get a shadow. A stalking imposter is still on
-// the deck (only a venting one is hidden).
+// Player + crew + imposters all get a shadow. An imposter is still on the
+// deck (only a venting one is hidden).
 const visibleActors = 1 + crewmates.length + imposters.length;
 if (count(withActors, "ellipse") !== visibleActors) {
   console.error(
@@ -109,10 +107,10 @@ if (count(withActors, "ellipse") !== visibleActors) {
   );
   process.exit(1);
 }
-// Imposters must not be marked out of the box: no reveal → no stalk link.
+// Imposters must not be marked out of the box: no reveal → no red marker.
 // The only dashes on a normal frame are the spawn marker and its reset.
 if (count(withActors, "setLineDash") !== count(mapCalls, "setLineDash")) {
-  console.error("imposters leaked a stalking link without analyst view");
+  console.error("actors drew a dashed overlay without analyst view");
   process.exit(1);
 }
 
@@ -124,8 +122,9 @@ try {
   console.error("drawMap (analyst view) threw:", err);
   process.exit(1);
 }
-if (count(revealed, "setLineDash") <= count(mapCalls, "setLineDash")) {
-  console.error("analyst view did not draw the stalking link");
+// The analyst tell is now the red marker above each imposter — an extra fill.
+if (count(revealed, "fill") <= count(withActors, "fill")) {
+  console.error("analyst view did not mark the imposters");
   process.exit(1);
 }
 

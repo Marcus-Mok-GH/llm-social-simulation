@@ -1,22 +1,14 @@
 import type { Vec2 } from "./collision";
-import type { Crewmate } from "./crewmate";
 import type { GameMap, PointOfInterest } from "./map";
 import { findPath, followPath, type NavGrid } from "./navigation";
 
 /**
  * Imposter behaviour is intentionally distinct from crewmates: they never run
- * real tasks, they follow ("stalk") crewmates instead of patrolling POIs, and
- * they use the map's vent POIs to travel quickly. Kill resolution, sabotage and
- * perception live in `engine.ts` — this module only owns *movement*.
+ * real tasks, they fake work at consoles for an alibi, and they use the map's
+ * vent POIs to travel quickly. Kill resolution, sabotage and perception live
+ * in `engine.ts` — this module only owns *movement*.
  */
-export type ImposterState =
-  | "idle"
-  | "walking"
-  | "stalking"
-  | "observing"
-  | "faking"
-  | "seeking_vent"
-  | "venting";
+export type ImposterState = "idle" | "walking" | "faking" | "seeking_vent" | "venting";
 
 export interface Imposter {
   id: number;
@@ -34,12 +26,8 @@ export interface Imposter {
   path: Vec2[];
   pathIndex: number;
   stagnant: number;
-
-  /** Stalking. */
-  targetCrewmateId: number | null;
-  lastCrewmateId: number | null;
-  stalkTime: number;
-  repathTimer: number;
+  /** Consecutive blocked re-paths for the current destination, abandoned after 2. */
+  blockRetries: number;
 
   /** Venting. */
   targetPoiId: string | null;
@@ -58,18 +46,9 @@ export const IMPOSTER_RADIUS = 15;
 export const IMPOSTER_SPEED = 230;
 const IDLE_MIN = 0.3;
 const IDLE_MAX = 0.9;
-/**
- * How close a stalker gets before it stops and watches. This must be inside
- * `KILL_RANGE` (44) in engine terms — hovering at arm's length means an
- * imposter can spend the whole match observing and never actually kill.
- */
-const STALK_DISTANCE = 34;
-const STALK_REPATH = 0.7;
-const STALK_GIVEUP = 30;
-const OBSERVE_MIN = 1.5;
-const OBSERVE_MAX = 3.0;
 const VENT_TRAVEL = 1.2;
-const STALK_PROB = 0.55;
+/** Chance an idle imposter repositions through the ducts instead of faking. */
+const VENT_PROB = 0.3;
 /** How long an imposter lingers at a console pretending to work. */
 export const FAKE_DURATION = 4.5;
 
@@ -151,10 +130,7 @@ export function createImposters(map: GameMap, count = 2, seed = 101): Imposter[]
       path: [],
       pathIndex: 0,
       stagnant: 0,
-      targetCrewmateId: null,
-      lastCrewmateId: null,
-      stalkTime: 0,
-      repathTimer: 0,
+      blockRetries: 0,
       targetPoiId: null,
       ventFromId: null,
       ventToId: null,
@@ -170,29 +146,10 @@ export function createImposters(map: GameMap, count = 2, seed = 101): Imposter[]
 function goIdle(imp: Imposter): void {
   imp.state = "idle";
   imp.timer = IDLE_MIN + rand(imp) * (IDLE_MAX - IDLE_MIN);
-  imp.targetCrewmateId = null;
   imp.targetPoiId = null;
   imp.path = [];
   imp.pathIndex = 0;
-}
-
-function startStalk(
-  imp: Imposter,
-  grid: NavGrid,
-  crewmates: Crewmate[],
-): boolean {
-  if (crewmates.length === 0) return false;
-  let target = crewmates[Math.floor(rand(imp) * crewmates.length)];
-  for (let i = 0; i < 4 && target.id === imp.lastCrewmateId; i++) {
-    target = crewmates[Math.floor(rand(imp) * crewmates.length)];
-  }
-  if (!pathTo(imp, grid, { x: target.x, y: target.y })) return false;
-
-  imp.targetCrewmateId = target.id;
-  imp.stalkTime = 0;
-  imp.repathTimer = STALK_REPATH;
-  imp.state = "stalking";
-  return true;
+  imp.blockRetries = 0;
 }
 
 function startVentTrip(imp: Imposter, map: GameMap, grid: NavGrid): boolean {
@@ -205,10 +162,20 @@ function startVentTrip(imp: Imposter, map: GameMap, grid: NavGrid): boolean {
   return true;
 }
 
-function decide(imp: Imposter, map: GameMap, grid: NavGrid, crewmates: Crewmate[]): void {
-  const wantsStalk = crewmates.length > 0 && rand(imp) < STALK_PROB;
-  if (wantsStalk && startStalk(imp, grid, crewmates)) return;
-  if (startVentTrip(imp, map, grid)) return;
+/** Pick a random console and walk to it to fake work (the alibi). */
+function pickAlibiConsole(imp: Imposter, map: GameMap, grid: NavGrid): boolean {
+  const consoles = map.pointsOfInterest.filter((p) => p.kind === "task");
+  if (consoles.length === 0) return false;
+  const poi = consoles[Math.floor(rand(imp) * consoles.length)];
+  return imposterFakeTask(imp, map, grid, poi.id);
+}
+
+function decide(imp: Imposter, map: GameMap, grid: NavGrid, canVent: boolean): void {
+  // Idle gaps look innocent: mostly fake work at a console, and only slip
+  // through a vent when nobody is around to see it. No lock-on pursuit —
+  // stalking is gone.
+  if (rand(imp) > VENT_PROB && pickAlibiConsole(imp, map, grid)) return;
+  if (canVent && startVentTrip(imp, map, grid)) return;
   goIdle(imp);
 }
 
@@ -222,91 +189,23 @@ function faceTo(imp: Imposter, x: number, y: number): void {
   }
 }
 
-function updateStalking(
-  imp: Imposter,
-  map: GameMap,
-  grid: NavGrid,
-  crewmates: Crewmate[],
-  dt: number,
-): void {
-  const target = crewmates.find((c) => c.id === imp.targetCrewmateId);
-  if (!target) {
-    goIdle(imp);
-    return;
-  }
-
-  imp.stalkTime += dt;
-  imp.repathTimer -= dt;
-
-  const dist = Math.hypot(target.x - imp.x, target.y - imp.y);
-  if (dist <= STALK_DISTANCE) {
-    imp.state = "observing";
-    imp.timer = OBSERVE_MIN + rand(imp) * (OBSERVE_MAX - OBSERVE_MIN);
-    faceTo(imp, target.x, target.y);
-    return;
-  }
-
-  if (imp.stalkTime > STALK_GIVEUP) {
-    imp.lastCrewmateId = imp.targetCrewmateId;
-    goIdle(imp);
-    return;
-  }
-
-  // Periodically re-path so we keep following a moving target.
-  if (imp.repathTimer <= 0) {
-    if (!pathTo(imp, grid, { x: target.x, y: target.y })) {
-      goIdle(imp);
-      return;
-    }
-    imp.repathTimer = STALK_REPATH;
-  }
-
-  const result = followPath(map, imp, dt);
-  if (result === "arrived" || result === "blocked") {
-    if (!pathTo(imp, grid, { x: target.x, y: target.y })) {
-      goIdle(imp);
-      return;
-    }
-    imp.repathTimer = STALK_REPATH;
-  }
-}
-
-function updateObserving(
-  imp: Imposter,
-  grid: NavGrid,
-  crewmates: Crewmate[],
-  dt: number,
-): void {
-  imp.timer -= dt;
-  const target = crewmates.find((c) => c.id === imp.targetCrewmateId);
-
-  if (target) {
-    faceTo(imp, target.x, target.y);
-    const dist = Math.hypot(target.x - imp.x, target.y - imp.y);
-    if (dist > STALK_DISTANCE * 1.7) {
-      if (pathTo(imp, grid, { x: target.x, y: target.y })) {
-        imp.state = "stalking";
-        imp.repathTimer = STALK_REPATH;
-        return;
-      }
-    }
-  }
-
-  if (imp.timer <= 0) {
-    imp.lastCrewmateId = imp.targetCrewmateId;
-    goIdle(imp);
-  }
-}
-
 function updateSeekingVent(
   imp: Imposter,
   map: GameMap,
   grid: NavGrid,
   dt: number,
+  canVent: boolean,
 ): void {
   const result = followPath(map, imp, dt);
 
   if (result === "arrived") {
+    // The gate ran when the trip was planned, but the walk takes seconds and
+    // the crew moves: if someone is watching the grate now, climbing in is a
+    // confession. Abort and blend back into the crowd.
+    if (!canVent) {
+      goIdle(imp);
+      return;
+    }
     const to = pickVent(map, imp);
     imp.ventFromId = imp.targetPoiId;
     imp.ventToId = to?.id ?? null;
@@ -317,8 +216,13 @@ function updateSeekingVent(
   }
 
   if (result === "blocked") {
+    // A deterministic A* re-path to the same point reproduces the same wedge,
+    // so retrying forever just freezes the agent. After a couple of blocked
+    // attempts, abandon this destination and let idle re-planning pick a new
+    // one.
+    imp.blockRetries++;
     const poi = map.pointsOfInterest.find((p) => p.id === imp.targetPoiId);
-    if (!poi || !pathTo(imp, grid, { x: poi.x, y: poi.y })) goIdle(imp);
+    if (imp.blockRetries > 2 || !poi || !pathTo(imp, grid, { x: poi.x, y: poi.y })) goIdle(imp);
   }
 }
 
@@ -361,8 +265,9 @@ function updateWalking(imp: Imposter, map: GameMap, grid: NavGrid, dt: number): 
     return;
   }
   if (result === "blocked") {
+    imp.blockRetries++;
     const poi = map.pointsOfInterest.find((p) => p.id === imp.targetPoiId);
-    if (!poi || !pathTo(imp, grid, { x: poi.x, y: poi.y })) goIdle(imp);
+    if (imp.blockRetries > 2 || !poi || !pathTo(imp, grid, { x: poi.x, y: poi.y })) goIdle(imp);
   }
 }
 
@@ -381,6 +286,7 @@ export function imposterFakeTask(
   if (!poi) return false;
   if (!pathTo(imp, grid, { x: poi.x, y: poi.y })) return false;
   imp.targetPoiId = poi.id;
+  imp.blockRetries = 0;
   imp.state = "walking";
   return true;
 }
@@ -389,24 +295,8 @@ export function imposterFakeTask(
 export function imposterGotoPoint(imp: Imposter, grid: NavGrid, x: number, y: number): boolean {
   if (!pathTo(imp, grid, { x, y })) return false;
   imp.targetPoiId = null;
+  imp.blockRetries = 0;
   imp.state = "walking";
-  return true;
-}
-
-/** Chase a specific crewmate. */
-export function imposterStalk(
-  imp: Imposter,
-  grid: NavGrid,
-  crewmates: Crewmate[],
-  targetId: number,
-): boolean {
-  const target = crewmates.find((c) => c.id === targetId);
-  if (!target) return false;
-  if (!pathTo(imp, grid, { x: target.x, y: target.y })) return false;
-  imp.targetCrewmateId = target.id;
-  imp.stalkTime = 0;
-  imp.repathTimer = STALK_REPATH;
-  imp.state = "stalking";
   return true;
 }
 
@@ -421,6 +311,7 @@ export function imposterSeekVent(
   if (!vent) return false;
   if (!pathTo(imp, grid, { x: vent.x, y: vent.y })) return false;
   imp.targetPoiId = vent.id;
+  imp.blockRetries = 0;
   imp.state = "seeking_vent";
   return true;
 }
@@ -431,32 +322,29 @@ export function imposterHalt(imp: Imposter): void {
   imp.timer = 0.3;
   imp.path = [];
   imp.pathIndex = 0;
-  imp.targetCrewmateId = null;
   imp.fakeProgress = 0;
 }
 
-/** Advance one imposter by one tick. Crewmates are passed in as stalk targets. */
+/**
+ * Advance one imposter by one tick. `canVent` is the engine's read of "no crew
+ * is in this imposter's sight" — venting under someone's eyes is a confession,
+ * so idle vent trips only happen when the coast is clear.
+ */
 export function updateImposter(
   map: GameMap,
   grid: NavGrid,
   imp: Imposter,
-  crewmates: Crewmate[],
+  canVent: boolean,
   dt: number,
 ): void {
   switch (imp.state) {
     case "idle": {
       imp.timer -= dt;
-      if (imp.timer <= 0) decide(imp, map, grid, crewmates);
+      if (imp.timer <= 0) decide(imp, map, grid, canVent);
       break;
     }
-    case "stalking":
-      updateStalking(imp, map, grid, crewmates, dt);
-      break;
-    case "observing":
-      updateObserving(imp, grid, crewmates, dt);
-      break;
     case "seeking_vent":
-      updateSeekingVent(imp, map, grid, dt);
+      updateSeekingVent(imp, map, grid, dt, canVent);
       break;
     case "venting":
       updateVenting(imp, map, dt);
