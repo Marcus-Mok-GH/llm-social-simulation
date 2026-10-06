@@ -159,7 +159,18 @@ export interface WorldView {
     lines: string[];
     ejected: string | null;
   }[];
-  sabotage: { kind: string; secondsLeft: number; fixPoiId: string; fixRoomId: RoomId } | null;
+  sabotage: {
+    kind: string;
+    secondsLeft: number;
+    fixPoiId: string;
+    fixRoomId: RoomId;
+    /**
+     * Every repair point and whether *someone else* is already holding it. The
+     * reactor's two scanners must be held at once, so `held` is what tells an
+     * agent whether to take the open scanner or stay on the one it has.
+     */
+    fixPois: { id: string; roomId: RoomId; held: boolean }[];
+  } | null;
   cooldowns: { kill: number; sabotage: number };
   /** True only while the agent can currently see an unreported body. */
   bodyOutstanding: boolean;
@@ -224,6 +235,9 @@ function systemPrompt(view: WorldView): string {
     "object — and the station walks you there.",
     "You act on objects and people with INTERACT. A referee verifies every action and, if it",
     "is rejected, tells you why in system_message on your next turn so you can correct it.",
+    "A reactor meltdown needs BOTH hand scanners in Reactor held at the same time by two",
+    "different people: if a scanner already has someone on it, take the other one instead of",
+    "doubling up, and only then does the repair progress.",
     "You keep a memory between turns: your current goal, why you chose your last action, and",
     "a recap of every meeting. Nothing is forgotten: your_history holds every event you have",
     "observed this match, your_decisions holds every decision you have made, and your_goal /",
@@ -332,6 +346,17 @@ function validateIntent(raw: unknown, view: WorldView): Intent | null {
  * Choose a destination zone using the same node data the model sees. Returns a
  * zone id; the engine resolves it and paths from the current node.
  */
+/**
+ * Stable per-agent number, used to split a crew across the reactor's two
+ * scanners without a shared coordinator: two agents that both see both pads
+ * open will usually hash to different ones.
+ */
+function agentHash(key: string): number {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return h;
+}
+
 export function heuristicIntent(view: WorldView, rand: () => number): Intent {
   const pickFrom = <T>(arr: T[]): T | null => (arr.length > 0 ? arr[Math.floor(rand() * arr.length)] : null);
   const pickZone = (): string => {
@@ -406,6 +431,11 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
   }
 
   // Crew: fix a live hazard first, then act on whatever they are standing at.
+  // This is ordinary-player behaviour, not a coordinator: stand on the scanner
+  // you have reached, and when heading over, pick one that is still open — if
+  // both are open, a stable hash of the agent key splits the crew rather than
+  // sending everyone to the same pad. Two people can still pile onto one
+  // scanner and lose the reactor, exactly as they can in the real game.
   const fix = ready("FIX");
   if (fix)
     return {
@@ -414,8 +444,15 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
       interaction_type: "FIX",
       reasoning: "the hazard needs fixing now",
     };
-  if (view.sabotage && rand() < 0.75) {
-    return { action: "MOVE", target: view.sabotage.fixPoiId, reasoning: "head to the repair panel" };
+  if (view.sabotage && rand() < 0.85) {
+    const pads = view.sabotage.fixPois;
+    const open = pads.filter((p) => !p.held);
+    const pick = open.length > 0 ? open[agentHash(view.self.key) % open.length] : pads[0];
+    return {
+      action: "MOVE",
+      target: pick?.id ?? view.sabotage.fixPoiId,
+      reasoning: "head to the repair panel",
+    };
   }
 
   const task = ready("TASK");

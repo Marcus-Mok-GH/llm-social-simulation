@@ -30,6 +30,7 @@ function check(cond: boolean, msg: string): void {
  */
 interface EngineInternals {
   applyIntent(actor: unknown, intent: Intent): void;
+  updateSabotage(dt: number): void;
   buildView(actor: unknown): {
     interactables: Interactable[];
     system_message: string | null;
@@ -199,6 +200,83 @@ check(
 
 // --- 9. Sanity: the tuning constants the messages describe are the live ones -----------------
 check(INTERACT_RANGE > 0 && KILL_RANGE > 0 && KILL_COOLDOWN > 0, "interaction constants are positive");
+
+// --- 10. Reactor meltdown: two hands on two scanners, at the same time -----------------------
+// A fresh engine so the sabotage runs against an untouched roster. `updateSabotage`
+// is driven directly so the actors *stay* where this test puts them instead of
+// wandering off and repairing it by accident.
+const melt = new GameEngine({ playerIsImposter: false, seed: 11, llm: false });
+melt.begin();
+const meltInternals = melt as unknown as EngineInternals;
+const pads = ["sab_hand_n", "sab_hand_s"].map(
+  (id) => melt.map.pointsOfInterest.find((p) => p.id === id)!,
+);
+const crewmates = melt.actors.filter((a) => a.kind === "crew");
+
+check(melt.triggerSabotage("meltdown"), "a traitor can trigger the reactor meltdown");
+check(melt.sabotage?.kind === "meltdown", "the live sabotage is the meltdown");
+
+// Everyone off the scanners, holds cleared, then one crewmate works one pad.
+for (const a of melt.actors) {
+  a.fixUntil = 0;
+  a.entity.x = -500;
+  a.entity.y = -500;
+}
+crewmates[0].entity.x = pads[0].x;
+crewmates[0].entity.y = pads[0].y;
+crewmates[0].fixUntil = melt.time + 20;
+for (let i = 0; i < 12; i++) meltInternals.updateSabotage(0.5);
+check(
+  melt.sabotage !== null,
+  "one scanner held alone never repairs the meltdown (it needs a second user)",
+);
+
+// Second crewmate on the other scanner: now both pads are held simultaneously.
+crewmates[1].entity.x = pads[1].x;
+crewmates[1].entity.y = pads[1].y;
+crewmates[1].fixUntil = melt.time + 20;
+for (let i = 0; i < 12 && melt.sabotage; i++) meltInternals.updateSabotage(0.5);
+check(melt.sabotage === null, "both scanners held at once repair the meltdown");
+
+// The beacon is locked while a critical sabotage is live.
+melt.sabotageCooldown = 0;
+melt.triggerSabotage("meltdown");
+melt.actors[0].actionFeedback = null;
+const beacon = melt.map.pointsOfInterest.find((p) => p.kind === "emergency")!;
+meltInternals.applyIntent(melt.actors[0], {
+  action: "INTERACT",
+  target: beacon.id,
+  interaction_type: "EMERGENCY",
+});
+check(
+  melt.actors[0].actionFeedback?.includes("reactor is critical") === true,
+  `the emergency beacon is locked during a meltdown ("${melt.actors[0].actionFeedback}")`,
+);
+
+// A body report is the escape hatch: it cancels the meltdown and opens a meeting.
+melt.bodies.push({
+  id: 999,
+  key: "crew:9",
+  name: "LOST",
+  color: "#ffffff",
+  x: 700,
+  y: 700,
+  roomId: melt.map.rooms[0].id,
+});
+const reporter = melt.actors.find((a) => a.kind === "crew")!;
+reporter.entity.x = 704;
+reporter.entity.y = 700;
+meltInternals.applyIntent(reporter, {
+  action: "INTERACT",
+  target: "999",
+  interaction_type: "REPORT",
+});
+check(melt.sabotage === null, "a body report cancels the live meltdown");
+check(melt.meeting !== null, "the report opens a meeting");
+check(
+  melt.messages.some((m) => m.text.includes("interrupted the meltdown")),
+  "the cancellation is announced to the crew",
+);
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);

@@ -108,10 +108,10 @@ export function GameHud({
             />
             <span className="sr-only">
               {snap.sabotage.kind === "meltdown" ? "Reactor meltdown" : "Lights out"},{" "}
-              {Math.ceil(snap.sabotage.secondsLeft)} seconds left. Repair{" "}
+              {Math.ceil(snap.sabotage.secondsLeft)} seconds left.{" "}
               {snap.sabotage.kind === "meltdown"
-                ? "at a hand scanner in Reactor"
-                : "the panel in Electrical"}
+                ? "Hold both hand scanners in Reactor at once by two different people"
+                : "Repair the panel in Electrical"}
               .
             </span>
           </div>
@@ -167,6 +167,37 @@ export function GameHud({
         </div>
         <Meter value={snap.taskProgress} tone="signal" />
       </div>
+
+      {/* Reactor meltdown needs two hands on two scanners at once. Show which
+          pad is already covered so the crew knows to take the other one — the
+          on-screen equivalent of "WAITING FOR SECOND USER". */}
+      {snap.sabotage?.kind === "meltdown" && (
+        <div className="mx-auto mt-2 w-full max-w-md px-3">
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-[#ff4d6a]/50 bg-void-950/85 px-3 py-1.5 text-[10px] tracking-wider text-[#ff8a9c] backdrop-blur-sm">
+            <span>REACTOR MELTDOWN</span>
+            <span className="flex items-center gap-3">
+              {snap.sabotage.fixPois.map((p) => (
+                <span
+                  key={p.id}
+                  className="flex items-center gap-1.5"
+                  title={`${p.label} — ${p.held ? "held" : "waiting for second user"}`}
+                >
+                  <span
+                    className={cn(
+                      "h-2 w-2 rounded-full",
+                      p.held ? "bg-[#ff2d4d]" : "bg-slate-700",
+                    )}
+                  />
+                  {p.held ? "HELD" : "OPEN"}
+                </span>
+              ))}
+              <span className="tabular-nums text-[#ff4d6a]">
+                {Math.round(snap.sabotage.fixProgress * 100)}%
+              </span>
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Compact layout: the task list collapses to a chip under the meter so
           the deck keeps its space; opening it overlays the (fogged) map. */}

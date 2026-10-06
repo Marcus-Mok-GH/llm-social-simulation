@@ -262,6 +262,21 @@ export function crewmateWorkAt(
   return true;
 }
 
+/**
+ * Stand at a repair console for `seconds`. Distinct from `crewmateHalt`, which
+ * drops the agent into the idle loop where it immediately chooses a new task
+ * and walks off — fine for a meeting, fatal for a two-hand reactor hold. The
+ * decision layer refreshes this each time it re-chooses FIX.
+ */
+export function crewmateHold(agent: Crewmate, seconds: number): void {
+  agent.state = "idle";
+  agent.timer = seconds;
+  agent.path = [];
+  agent.pathIndex = 0;
+  agent.taskProgress = 0;
+  agent.targetPoiId = null;
+}
+
 /** Freeze a crewmate in place (meetings, briefing). */
 export function crewmateHalt(agent: Crewmate): void {
   agent.state = "idle";

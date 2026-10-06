@@ -42,6 +42,7 @@ import {
   crewmateGotoPoint,
   crewmateGotoPoi,
   crewmateHalt,
+  crewmateHold,
   crewmateWorkAt,
   updateCrewmate,
   type Crewmate,
@@ -138,7 +139,11 @@ export const KILL_RANGE = 44;
 export const KILL_WITNESS_RANGE = 230;
 export const KILL_COOLDOWN = 26;
 export const SABOTAGE_COOLDOWN = 34;
-export const MELTDOWN_TIME = 45;
+/**
+ * Time to repair the reactor meltdown. Among Us gives The Skeld 30 seconds
+ * (MIRA HQ gets 45, The Fungle 60) — and this deck is The Skeld.
+ */
+export const MELTDOWN_TIME = 30;
 export const BLACKOUT_TIME = 30;
 export const REPAIR_TIME = 4;
 export const BASE_VISION = 430;
@@ -383,6 +388,12 @@ export interface Snapshot {
     duration: number;
     fixPoiId: string;
     fixProgress: number;
+    /**
+     * Every repair point and whether someone is currently holding it. The
+     * reactor needs both scanners held at once, so the HUD uses this to show
+     * which pad still needs a second pair of hands.
+     */
+    fixPois: { id: string; label: string; room: string; held: boolean }[];
   } | null;
   visionRange: number;
   bodies: number;
@@ -1156,7 +1167,7 @@ export class GameEngine {
         fixPoiIds: ["sab_hand_n", "sab_hand_s"],
         fixProgress: 0,
       };
-      this.system("SABOTAGE: reactor meltdown — repair at a hand scanner in Reactor.");
+      this.system("SABOTAGE: reactor meltdown — hold BOTH hand scanners in Reactor at once.");
     } else {
       this.sabotage = {
         kind: "blackout",
@@ -1176,6 +1187,40 @@ export class GameEngine {
     return true;
   }
 
+  /**
+   * Who is actively holding each live repair point right now. A pad is held
+   * only by someone deliberately working it — the human is holding `e`, an AI
+   * is inside the `fixUntil` window it won when it chose FIX — and anyone alive
+   * can do it, because in Among Us both crewmates and impostors can resolve a
+   * meltdown. Occupancy is tracked per pad: the reactor's two scanners must be
+   * held *simultaneously*, so a single worker on either one is not enough.
+   *
+   * `exclude` drops one actor from the answer, which is what lets an agent ask
+   * "is someone else already on this pad?" without counting itself.
+   */
+  private sabotageHolders(exclude?: Actor): Map<string, Actor[]> {
+    const out = new Map<string, Actor[]>();
+    if (!this.sabotage) return out;
+    for (const id of this.sabotage.fixPoiIds) out.set(id, []);
+    for (const a of this.actors) {
+      if (!a.alive || a === exclude) continue;
+      if (a.isPlayer) {
+        if (!this.keys.has("e")) continue;
+      } else if (a.fixUntil <= this.time) {
+        // An AI only repairs after it has chosen and validated a FIX interaction.
+        continue;
+      }
+      for (const id of this.sabotage.fixPoiIds) {
+        const poi = this.map.pointsOfInterest.find((p) => p.id === id);
+        if (!poi) continue;
+        if (Math.hypot(poi.x - a.entity.x, poi.y - a.entity.y) <= INTERACT_RANGE) {
+          out.get(id)!.push(a);
+        }
+      }
+    }
+    return out;
+  }
+
   private updateSabotage(dt: number): void {
     if (this.sabotageCooldown > 0) this.sabotageCooldown = Math.max(0, this.sabotageCooldown - dt);
     if (this.emergencyCooldown > 0) {
@@ -1185,28 +1230,25 @@ export class GameEngine {
 
     this.sabotage.secondsLeft -= dt;
 
-    const fixables = this.living().filter((a) => a.role === "crew");
-    let workers = 0;
-    for (const a of fixables) {
-      if (a.isPlayer) {
-        if (!this.keys.has("e")) continue;
-      } else if (a.fixUntil <= this.time) {
-        // An AI only repairs after it has chosen and validated a FIX interaction.
-        continue;
-      }
-      const near = this.sabotage.fixPoiIds.some((id) => {
-        const poi = this.map.pointsOfInterest.find((p) => p.id === id);
-        return poi ? Math.hypot(poi.x - a.entity.x, poi.y - a.entity.y) <= INTERACT_RANGE : false;
-      });
-      if (near) workers++;
-    }
+    const holders = this.sabotageHolders();
+    const totalHolders = [...holders.values()].reduce((n, v) => n + v.length, 0);
+    // Every pad has to be occupied *at the same time*. Lights has a single
+    // console, so one worker is enough; the reactor's two scanners both need a
+    // hand, which is what makes it require two people.
+    const covered = this.sabotage.fixPoiIds.every(
+      (id) => (holders.get(id)?.length ?? 0) > 0,
+    );
 
-    if (workers > 0) {
-      this.sabotage.fixProgress += dt * (1 + 0.6 * (workers - 1));
+    if (covered) {
+      this.sabotage.fixProgress += dt * (1 + 0.4 * (totalHolders - 1));
       if (this.sabotage.fixProgress >= REPAIR_TIME) {
         const kind = this.sabotage.kind;
         this.sabotage = null;
-        this.system(`Sabotage repaired${kind === "blackout" ? " — lights restored" : ""}.`);
+        this.system(
+          kind === "blackout"
+            ? "Sabotage repaired — lights restored."
+            : "Reactor sabotage repaired — the meltdown is stopped.",
+        );
       }
     } else {
       this.sabotage.fixProgress = Math.max(0, this.sabotage.fixProgress - dt * 0.5);
@@ -1295,19 +1337,6 @@ export class GameEngine {
           in_range: sees(poi.x, poi.y),
         });
       }
-      if (this.sabotage) {
-        for (const id of this.sabotage.fixPoiIds) {
-          const poi = this.map.pointsOfInterest.find((p) => p.id === id);
-          if (!poi || (!here(poi.x, poi.y) && !sees(poi.x, poi.y))) continue;
-          out.push({
-            id: poi.id,
-            type: "FIX",
-            name: poi.label,
-            status: "active",
-            in_range: sees(poi.x, poi.y),
-          });
-        }
-      }
     } else if (a.role === "imposter") {
       const killable = a.killCooldown <= 0 ? this.killTargetFor(a) : null;
       for (const o of this.actors) {
@@ -1319,6 +1348,25 @@ export class GameEngine {
           name: o.name,
           status: "alive",
           in_range: killable?.key === o.key,
+        });
+      }
+    }
+
+    // Repair points are open to anyone alive — a traitor may stabilise the
+    // reactor to keep up the act, exactly as in Among Us. `held by another`
+    // means someone else is already on that pad, which is what tells an agent
+    // to take the other scanner instead of doubling up.
+    if (this.sabotage) {
+      const holders = this.sabotageHolders(a);
+      for (const id of this.sabotage.fixPoiIds) {
+        const poi = this.map.pointsOfInterest.find((p) => p.id === id);
+        if (!poi || (!here(poi.x, poi.y) && !sees(poi.x, poi.y))) continue;
+        out.push({
+          id: poi.id,
+          type: "FIX",
+          name: poi.label,
+          status: (holders.get(id)?.length ?? 0) > 0 ? "held by another" : "open",
+          in_range: sees(poi.x, poi.y),
         });
       }
     }
@@ -1337,15 +1385,19 @@ export class GameEngine {
 
     const beacon = this.map.pointsOfInterest.find((p) => p.kind === "emergency");
     if (beacon && (here(beacon.x, beacon.y) || sees(beacon.x, beacon.y))) {
+      // A critical sabotage locks the emergency button; a body report is the
+      // only way out, which is the Skeld's actual rule.
+      const critical = this.sabotage?.kind === "meltdown";
       out.push({
         id: beacon.id,
         type: "EMERGENCY",
         name: "Emergency beacon",
-        status:
-          this.emergencyCooldown > 0
+        status: critical
+          ? "locked — reactor critical"
+          : this.emergencyCooldown > 0
             ? `recharging ${Math.ceil(this.emergencyCooldown)}s`
             : "ready",
-        in_range: sees(beacon.x, beacon.y) && this.emergencyCooldown <= 0,
+        in_range: sees(beacon.x, beacon.y) && this.emergencyCooldown <= 0 && !critical,
       });
     }
 
@@ -1432,6 +1484,9 @@ export class GameEngine {
 
     const fixPoiId = this.sabotage?.fixPoiIds[0] ?? "";
     const fixPoi = this.map.pointsOfInterest.find((p) => p.id === fixPoiId);
+    // `held` is from everyone else's point of view, so an agent can tell on its
+    // own whether the second scanner already has someone on it.
+    const holders = this.sabotage ? this.sabotageHolders(a) : new Map<string, Actor[]>();
 
     return {
       self: {
@@ -1486,6 +1541,14 @@ export class GameEngine {
             secondsLeft: this.sabotage.secondsLeft,
             fixPoiId,
             fixRoomId: fixPoi.roomId,
+            fixPois: this.sabotage.fixPoiIds.map((id) => {
+              const poi = this.map.pointsOfInterest.find((p) => p.id === id);
+              return {
+                id,
+                roomId: (poi?.roomId ?? fixPoi.roomId) as RoomId,
+                held: (holders.get(id)?.length ?? 0) > 0,
+              };
+            }),
           }
         : null,
       cooldowns: { kill: a.killCooldown, sabotage: this.sabotageCooldown },
@@ -1978,7 +2041,8 @@ export class GameEngine {
       }
 
       case "FIX": {
-        if (a.role !== "crew") return "you cannot repair the sabotage.";
+        // Anyone alive may work a repair pad — impostors can stabilise the
+        // reactor too, which is how a traitor keeps a clean alibi.
         if (!this.sabotage) return "there is nothing to repair.";
         if (!this.sabotage.fixPoiIds.includes(target)) {
           return `'${target}' is not a live repair point.`;
@@ -1991,8 +2055,12 @@ export class GameEngine {
         if (!this.los(a.entity.x, a.entity.y, poi.x, poi.y)) {
           return "something is blocking your line of sight to the repair console.";
         }
+        // The agent has to actually *stay* on the pad: a plain halt drops it
+        // into the idle loop, which walks it off to a new task within a tick,
+        // and a two-hand meltdown needs the scanner occupied, not just visited.
         a.fixUntil = this.time + REPAIR_TIME + 2;
-        this.haltActor(a);
+        if (a.kind === "crew") crewmateHold(a.entity as Crewmate, REPAIR_TIME + 2);
+        else this.haltActor(a);
         return null;
       }
 
@@ -2010,6 +2078,9 @@ export class GameEngine {
       }
 
       case "EMERGENCY": {
+        if (this.sabotage?.kind === "meltdown") {
+          return "the reactor is critical — the beacon is locked until the meltdown is stopped or a body is reported.";
+        }
         if (this.emergencyCooldown > 0) {
           return `the emergency beacon is still recharging (${Math.ceil(this.emergencyCooldown)}s).`;
         }
@@ -2039,6 +2110,13 @@ export class GameEngine {
 
     this.phase = "meeting";
     this.meetingsHeld++;
+    // A reported body is the one thing that can end a critical sabotage: it
+    // cancels the meltdown and starts the meeting, exactly as on The Skeld.
+    // (The emergency button, by contrast, stays locked during a meltdown.)
+    if (reason.kind === "report" && this.sabotage?.kind === "meltdown") {
+      this.sabotage = null;
+      this.system("The report interrupted the meltdown — the reactor is stable for now.");
+    }
     const spawn = this.map.pointsOfInterest.find((p) => p.kind === "spawn");
     const sx = spawn?.x ?? 840;
     const sy = spawn?.y ?? 340;
@@ -2524,9 +2602,11 @@ export class GameEngine {
     if (poi) {
       if (poi.kind === "emergency") {
         parts.push(
-          this.emergencyCooldown > 0
-            ? `E — beacon recharging ${Math.ceil(this.emergencyCooldown)}s`
-            : "E — emergency meeting",
+          this.sabotage?.kind === "meltdown"
+            ? "E — beacon locked (reactor critical)"
+            : this.emergencyCooldown > 0
+              ? `E — beacon recharging ${Math.ceil(this.emergencyCooldown)}s`
+              : "E — emergency meeting",
         );
       }
       if (poi.kind === "task") {
@@ -2540,7 +2620,23 @@ export class GameEngine {
         this.sabotage &&
         this.sabotage.fixPoiIds.includes(poi.id)
       ) {
-        parts.push(`HOLD E — repair (${Math.round(this.sabotage.fixProgress * 100)}%)`);
+        const pct = Math.round(this.sabotage.fixProgress * 100);
+        if (this.sabotage.kind === "meltdown") {
+          // The second scanner is the whole mechanic: say whether a partner is
+          // already holding it, the way the real panel reads "WAITING FOR
+          // SECOND USER" until both hands are down.
+          const holders = this.sabotageHolders();
+          const secondUser = this.sabotage.fixPoiIds
+            .filter((id) => id !== poi.id)
+            .every((id) => (holders.get(id)?.length ?? 0) > 0);
+          parts.push(
+            secondUser
+              ? `HOLD E — reactor stabilising (${pct}%)`
+              : "HOLD E — waiting for second user",
+          );
+        } else {
+          parts.push(`HOLD E — repair (${pct}%)`);
+        }
       }
     }
 
@@ -2560,6 +2656,10 @@ export class GameEngine {
     if (!poi) return;
 
     if (poi.kind === "emergency") {
+      if (this.sabotage?.kind === "meltdown") {
+        this.note("The reactor is critical — the beacon is locked out.");
+        return;
+      }
       if (this.emergencyCooldown > 0) {
         this.note(`Emergency beacon recharging — ${Math.ceil(this.emergencyCooldown)}s.`);
         return;
@@ -2795,6 +2895,7 @@ export class GameEngine {
 
   snapshot(): Snapshot {
     const me = this.playerActor;
+    const holders = this.sabotage ? this.sabotageHolders() : new Map<string, Actor[]>();
 
     return {
       phase: this.phase,
@@ -2820,6 +2921,15 @@ export class GameEngine {
             duration: this.sabotage.kind === "meltdown" ? MELTDOWN_TIME : BLACKOUT_TIME,
             fixPoiId: this.sabotage.fixPoiIds[0],
             fixProgress: Math.min(1, this.sabotage.fixProgress / REPAIR_TIME),
+            fixPois: this.sabotage.fixPoiIds.map((id) => {
+              const poi = this.map.pointsOfInterest.find((p) => p.id === id);
+              return {
+                id,
+                label: poi?.label ?? id,
+                room: poi ? roomAt(this.map, poi.x, poi.y).name : "",
+                held: (holders.get(id)?.length ?? 0) > 0,
+              };
+            }),
           }
         : null,
       visionRange: this.visionRange,

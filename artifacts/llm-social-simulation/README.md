@@ -16,7 +16,7 @@ to trust, and **argue and vote** in meetings.
 | **Tasks** | Per-agent task lists, shared station bar, two playable minigames (wiring, calibration) |
 | **Interactions** | Agents choose `INTERACT` (`TASK`/`KILL`/`FIX`/`REPORT`/`EMERGENCY`) against objects in their current node; the engine re-checks distance, game state and line of sight, rejects illegal actions and feeds the reason back as `system_message` |
 | **Kills & bodies** | Kill is a validated interaction with a real witness check (line of sight within 230u), corpses, reporting |
-| **Sabotage** | Reactor meltdown (45s — repaired at a Reactor hand scanner) and lights out (halves every agent's vision — repaired in Electrical) |
+| **Sabotage** | Reactor meltdown (30s, The Skeld's length — both Reactor hand scanners must be held at once by two people; the beacon locks out until it is fixed or a body is reported) and lights out (halves every agent's vision — repaired in Electrical) |
 | **Meetings** | Report or emergency beacon → discussion → voting → tally → ejection |
 | **Belief model** | Per-agent complete match log (every event, sighting, decision and meeting, from start to finish) + suspicion vector with decay, vent sightings, body-room inference |
 | **LLM decision loop** | A configurable OpenAI-compatible provider (Pollinations or Berget) returns validated JSON intents (`MOVE`/`INTERACT`/`VENT`/`SABOTAGE`) and meeting lines; each AI agent runs a **different** model from a cheap-model pool, with heuristic fallback on any failure |
