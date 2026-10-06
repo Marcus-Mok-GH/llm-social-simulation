@@ -21,23 +21,23 @@
     "check": "pnpm run typecheck && pnpm run validate:map && pnpm run validate:movement && pnpm run validate:touch && pnpm run validate:render && pnpm run validate:ui && pnpm run validate:ai && pnpm run validate:interactions && pnpm run validate:imposters && pnpm run simulate"
   },
   "dependencies": {
-    "clsx": "catalog:",
+    "clsx": "^2.1.1",
     "convex": "^1.17.0",
-    "framer-motion": "catalog:",
-    "lucide-react": "catalog:",
+    "framer-motion": "^12.23.24",
+    "lucide-react": "^0.545.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "tailwind-merge": "catalog:"
+    "tailwind-merge": "^3.3.1"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
+    "@types/node": "^25.3.3",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
-    "@vitejs/plugin-react": "catalog:",
+    "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.9.3",
-    "vite": "catalog:"
+    "vite": "^7.3.2"
   }
 }

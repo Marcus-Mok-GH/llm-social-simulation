@@ -36,8 +36,9 @@ export default defineConfig({
   },
   root: path.resolve(import.meta.dirname),
   build: {
-    // Static hosting serves the built site straight from dist/.
-    outDir: path.resolve(import.meta.dirname, 'dist'),
+    // The deployable package root is the repo root, and static hosting serves
+    // the built site straight from dist/ there.
+    outDir: path.resolve(import.meta.dirname, '..', '..', 'dist'),
     emptyOutDir: true,
   },
   server: {
