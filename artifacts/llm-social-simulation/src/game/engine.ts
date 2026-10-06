@@ -28,6 +28,7 @@ import {
 import {
   activeProvider,
   configFor,
+  modelDisplayName,
   RequestGate,
   type LlmConfig,
   type LlmProvider,
@@ -792,10 +793,13 @@ export class GameEngine {
     return configFor(this.provider, model);
   }
 
-  /** Display name for an agent: the model that actually runs it. */
+  /**
+   * Display name for an agent: the model that actually runs it, rendered as a
+   * readable name ("Minimax M3") rather than the raw provider/model ID.
+   */
   private modelNameOf(cfg: LlmConfig | null): string {
     if (cfg?.model) {
-      return cfg.model.toUpperCase() || this.AGENT_MODEL_NAMES[cfg.provider];
+      return modelDisplayName(cfg.model) || this.AGENT_MODEL_NAMES[cfg.provider];
     }
     return this.AGENT_MODEL_NAMES.pollinations;
   }

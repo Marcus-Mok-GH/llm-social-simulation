@@ -65,6 +65,65 @@ export const POLLINATIONS_MODELS = [
   "openai/gpt-5.4-nano",
 ] as const;
 
+/**
+ * Readable labels for the pool models, so an agent introduces itself as
+ * "Minimax M3" rather than the raw provider/model ID "minimax/minimax-m3".
+ */
+const MODEL_DISPLAY_NAMES: Record<string, string> = {
+  "openai/gpt-6-luna": "GPT-6 Luna",
+  "openai/gpt-5-nano": "GPT-5 Nano",
+  "minimax/minimax-m3": "Minimax M3",
+  "deepseek/deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
+  "mistralai/mistral-large-3": "Mistral Large 3",
+  "openai/gpt-5.4-nano": "GPT-5.4 Nano",
+  "mistral-small": "Mistral Small",
+};
+
+const MODEL_ACRONYMS = new Set(["gpt", "ai", "llm", "api", "oss"]);
+
+/** Title-case one dash-separated segment, keeping version tokens tidy. */
+function titleCaseSegment(segment: string): string {
+  if (!segment) return segment;
+  if (MODEL_ACRONYMS.has(segment.toLowerCase())) return segment.toUpperCase();
+  // "m3" -> "M3", "v4.1" -> "V4.1"
+  const versioned = /^([a-z])(\d.*)$/.exec(segment);
+  if (versioned) return `${versioned[1].toUpperCase()}${versioned[2]}`;
+  return segment[0].toUpperCase() + segment.slice(1);
+}
+
+/**
+ * Turn a provider model ID into a readable name: `minimax/minimax-m3` →
+ * "Minimax M3", `deepseek/deepseek-v4.1-flash` → "DeepSeek V4.1 Flash".
+ * Unknown IDs still prettify, so `VITE_POLLINATIONS_MODELS` overrides render
+ * legibly instead of falling back to the raw ID.
+ */
+export function modelDisplayName(id: string): string {
+  const known = MODEL_DISPLAY_NAMES[id];
+  if (known) return known;
+
+  const bare = id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id;
+  const knownBare = MODEL_DISPLAY_NAMES[bare];
+  if (knownBare) return knownBare;
+
+  const segments = bare.split("-").filter(Boolean);
+  const parts: string[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const prev = parts[parts.length - 1];
+    // "gpt" + "6" -> "GPT-6" (keep a version glued to an acronym stem).
+    if (
+      /^\d/.test(seg) &&
+      prev &&
+      MODEL_ACRONYMS.has(segments[i - 1].toLowerCase())
+    ) {
+      parts[parts.length - 1] = `${prev}-${seg}`;
+      continue;
+    }
+    parts.push(titleCaseSegment(seg));
+  }
+  return parts.join(" ") || id;
+}
+
 export const BERGET_BASE_URL = "https://api.berget.ai/v1";
 const BERGET_DEFAULT_MODEL = "mistral-small";
 
