@@ -480,9 +480,9 @@ export async function intentWithModel(ctx: AiContext, view: WorldView): Promise<
     const text = await complete(ctx.cfg, messages, {
       json: true,
       temperature: 0.5,
-      // Reasoning models spend part of the budget thinking before the intent,
-      // so leave headroom; the replies themselves are tiny.
-      maxTokens: 220,
+      // Reasoning runs at max effort, so leave generous headroom for thinking
+      // tokens before the intent; the replies themselves are tiny.
+      maxTokens: 600,
     });
     if (!text) return null;
     ctx.onRaw?.(text);
@@ -514,34 +514,27 @@ function statementSystem(mind: Mind): string {
   const live = [
     "This is a live group discussion: read the conversation so far, react to what others — including the human player — said, and answer the human directly if they addressed you.",
     "Never repeat a line that anyone has already said.",
+    "Speak for yourself. Say what you saw, what you remember and what you believe — do not formally accuse or demand a vote; that is the room's call, not yours.",
   ];
   if (mind.role === "imposter") {
     return [
       "You are the hidden traitor in a social-deduction meeting aboard a space station.",
-      "Stay calm, deflect, never reveal yourself, and push suspicion onto an innocent crew member.",
+      "Stay calm, deflect, never reveal yourself, and steer suspicion toward an innocent crew member through what you say.",
       "Do not contradict facts you could not possibly know.",
       ...live,
-      'Reply with ONLY JSON: {"line":"<one or two sentences>","accuse":"<name or null>"}',
+      'Reply with ONLY JSON: {"line":"<one or two sentences>"}',
     ].join("\n");
   }
   return [
     "You are an honest crew member in a social-deduction meeting aboard a space station.",
-    "Report what you remember and name who you suspect. One or two sentences, spoken aloud.",
+    "Report what you remember and share who you find suspicious. One or two sentences, spoken aloud.",
     ...live,
-    'Reply with ONLY JSON: {"line":"<one or two sentences>","accuse":"<name or null>"}',
+    'Reply with ONLY JSON: {"line":"<one or two sentences>"}',
   ].join("\n");
 }
 
 function nameOf(names: NameIndex, key: string): string {
   return names[key] ?? key;
-}
-
-function keyForName(names: NameIndex, name: string): string | null {
-  const wanted = name.trim().toLowerCase();
-  for (const [key, value] of Object.entries(names)) {
-    if (value.toLowerCase() === wanted) return key;
-  }
-  return null;
 }
 
 export async function statementWithModel(
@@ -574,7 +567,7 @@ export async function statementWithModel(
       ejected: m.ejected ? m.ejected.name : null,
     })),
     instruction:
-      "This discussion is ongoing — build on the conversation so far and on what the human said (answer them directly if they spoke to you), and never repeat anything already said. Decide for yourself, from your own memory, who is worth accusing — only produce the spoken line and who you accuse.",
+      "This discussion is ongoing — build on the conversation so far and on what the human said (answer them directly if they spoke to you), and never repeat anything already said. Speak for yourself, from your own memory: only produce the spoken line.",
   };
 
   const release = await ctx.gate.acquire();
@@ -588,20 +581,18 @@ export async function statementWithModel(
         { role: "system", content: statementSystem(mind) },
         { role: "user", content: JSON.stringify(payload) },
       ],
-      // Generous enough that a reasoning model still emits the full JSON
-      // object after its hidden reasoning tokens.
-      { json: true, temperature: 0.85, maxTokens: 320 },
+      // Generous enough that a max-effort reasoning model still emits the
+      // full JSON object after its hidden reasoning tokens.
+      { json: true, temperature: 0.85, maxTokens: 900 },
     );
     if (!text) return null;
     ctx.onRaw?.(text);
 
-    const parsed = extractJson<{ line?: unknown; accuse?: unknown }>(text);
+    const parsed = extractJson<{ line?: unknown }>(text);
     if (!parsed || typeof parsed.line !== "string" || parsed.line.trim().length === 0) return null;
 
     const line = parsed.line.trim().slice(0, 240);
-    const accuse =
-      typeof parsed.accuse === "string" ? keyForName(names, parsed.accuse) : null;
-    return { line, accuse };
+    return { line };
   } finally {
     release();
   }

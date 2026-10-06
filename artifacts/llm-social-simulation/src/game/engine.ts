@@ -448,6 +448,15 @@ export class GameEngine {
   private readonly ai: AiContext;
   private perceptionAcc = 0;
 
+  /**
+   * Display name per provider, used when no model is configured: agents still
+   * introduce themselves as the AI they are rather than a fictional alias.
+   */
+  private readonly AGENT_MODEL_NAMES: Record<LlmProvider, string> = {
+    pollinations: "POLLINATIONS",
+    berget: "BERGET",
+  };
+
   constructor(opts: EngineOptions = {}) {
     this.map = opts.map ?? DEFAULT_MAP;
     this.grid = buildNavGrid(this.map);
@@ -488,6 +497,18 @@ export class GameEngine {
 
     const imposterKeys = this.imposters.map((_, i) => `imp:${i}`);
 
+    // AI agents are named for the model that runs them. If the provider's
+    // pool is smaller than the roster (Berget has a single model), repeats
+    // get a number so every agent stays uniquely addressable in prompts.
+    const aiNames: string[] = [];
+    const seenNames = new Map<string, number>();
+    for (let i = 0; i < this.crewmates.length + this.imposters.length; i++) {
+      const base = this.agentDisplayName(i);
+      const seen = (seenNames.get(base) ?? 0) + 1;
+      seenNames.set(base, seen);
+      aiNames.push(seen === 1 ? base : `${base}-${seen}`);
+    }
+
     const playerMind = createMind("player", playerRole, playerIsImposter ? imposterKeys : []);
 
     this.actors = [
@@ -517,10 +538,23 @@ export class GameEngine {
         fixUntil: 0,
         voteAt: 0,
       },
-      ...this.crewmates.map((e, i) => this.makeActor(`crew:${i}`, e, "crew", i)),
-      ...this.imposters.map((e, i) =>
-        this.makeActor(`imp:${i}`, e, "imposter", this.crewmates.length + i),
-      ),
+      ...this.crewmates.map((e, i) => {
+        // The entity's name drives the canvas label, so rename the entity
+        // itself and keep every surface (render, transcripts, prompts) on the
+        // same model-derived name.
+        e.name = aiNames[i];
+        return this.makeActor(`crew:${i}`, e, "crew", i, aiNames[i]);
+      }),
+      ...this.imposters.map((e, i) => {
+        e.name = aiNames[this.crewmates.length + i];
+        return this.makeActor(
+          `imp:${i}`,
+          e,
+          "imposter",
+          this.crewmates.length + i,
+          aiNames[this.crewmates.length + i],
+        );
+      }),
     ];
 
     // Imposters know each other; that secrecy is what makes them dangerous.
@@ -593,10 +627,11 @@ export class GameEngine {
     entity: Crewmate | Imposter,
     role: "crew" | "imposter",
     index: number,
+    displayName: string,
   ): Actor {
     return {
       key,
-      name: entity.name,
+      name: displayName,
       color: entity.color,
       role,
       kind: role === "crew" ? "crew" : "imposter",
@@ -631,6 +666,25 @@ export class GameEngine {
     if (!this.provider || this.provider.models.length === 0) return null;
     const model = this.provider.models[index % this.provider.models.length];
     return configFor(this.provider, model);
+  }
+
+  /** Display name for an agent: the model that actually runs it. */
+  private modelNameOf(cfg: LlmConfig | null): string {
+    if (cfg?.model) {
+      return cfg.model.toUpperCase() || this.AGENT_MODEL_NAMES[cfg.provider];
+    }
+    return this.AGENT_MODEL_NAMES.pollinations;
+  }
+
+  /**
+   * Display name for roster slot `index`: the model that runs that agent.
+   * With no provider configured (pure heuristic mode) there is no model name,
+   * so agents are simply numbered AI-1, AI-2, …
+   */
+  private agentDisplayName(index: number): string {
+    const cfg = this.modelFor(index);
+    if (!cfg) return `AI-${index + 1}`;
+    return this.modelNameOf(cfg);
   }
 
   /** Per-agent decision context: its own endpoint, the shared gate and budget. */
@@ -1944,8 +1998,6 @@ export class GameEngine {
     const post = (stmt: Statement, source: ThoughtSource, json?: string | null): void => {
       // Late model replies must not leak into voting or the next meeting.
       if (this.meeting !== m || m.stage !== "discussion") return;
-      this.say(a, stmt.line);
-      if (stmt.accuse) this.applyAccusation(a, stmt.accuse, m);
       // Meeting lines belong in the feed too: what the agent said and, for
       // model statements, the raw JSON reply the line was parsed out of.
       this.thoughts.push({
@@ -1955,7 +2007,7 @@ export class GameEngine {
         name: a.name,
         color: a.color,
         action: `Said: ${stmt.line.slice(0, 96)}${stmt.line.length > 96 ? "..." : ""}`,
-        reasoning: stmt.accuse ? `Accusing ${this.names[stmt.accuse] ?? stmt.accuse}` : null,
+        reasoning: null,
         source,
         json: source === "model" ? (json ?? this.lastRawByKey.get(a.key) ?? null) : null,
       });
@@ -1984,30 +2036,10 @@ export class GameEngine {
   }
 
   /**
-   * Listeners remember who accused whom. Beliefs shift only because the
-   * accusation becomes part of each listener's own memory — the engine does
-   * not adjust anyone's suspicion directly.
+   * Listeners simply hear what was said. Every agent speaks for itself —
+   * beliefs shift only from each listener's own observations, never from an
+   * engine-side accusation adjustment.
    */
-  private applyAccusation(speaker: Actor, target: string, m: MeetingState): void {
-    void m;
-    const targetName = this.names[target] ?? target;
-    const roomId = roomAt(this.map, speaker.entity.x, speaker.entity.y).id;
-    for (const listener of this.living()) {
-      if (listener === speaker) continue;
-      const accusedIsAlly = listener.mind.allies.includes(target);
-      remember(listener.mind, {
-        t: this.time,
-        kind: "claim",
-        // An ally being pointed at makes the *speaker* the memorable party.
-        actorKey: accusedIsAlly ? speaker.key : target,
-        roomId,
-        text: accusedIsAlly
-          ? `${speaker.name} accused ${targetName} — someone to keep an eye on.`
-          : `${speaker.name} accused ${targetName}.`,
-      });
-    }
-  }
-
   playerSay(text: string): void {
     if (this.spectator) return;
     const m = this.meeting;

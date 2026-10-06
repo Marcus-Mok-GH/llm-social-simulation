@@ -32,7 +32,6 @@ export type MemoryKind =
   | "vent"
   | "sabotage"
   | "task"
-  | "claim"
   | "flag"
   | "report"
   | "eject";
@@ -135,8 +134,6 @@ const KIND_WEIGHT: Record<MemoryKind, number> = {
   vent: 0.6,
   /** Incriminating circumstance (loitering by a body, last seen in the room). */
   flag: 0.35,
-  /** Someone accused them during a meeting. */
-  claim: 0.2,
   /** Attribution of a triggered sabotage. */
   sabotage: 0.3,
   /** Neutral context: these memories inform reasoning, not suspicion. */

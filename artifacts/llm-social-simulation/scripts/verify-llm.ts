@@ -145,7 +145,10 @@ for (const model of provider.models) {
   const text = await complete(
     configFor(provider, model),
     [{ role: "user", content: 'Reply with only the JSON {"ok":true}' }],
-    { json: true, maxTokens: 160 },
+    // Generous headroom: reasoning runs at max effort, so reasoning-heavy
+    // models (GPT-5 Nano, MiniMax) spend most of the budget thinking before
+    // the tiny JSON answer.
+    { json: true, maxTokens: 800 },
   );
   const parsed = text ? extractJson<{ ok?: unknown }>(text) : null;
   check(Boolean(parsed && parsed.ok !== undefined), `${model} answered in JSON mode`);
@@ -203,18 +206,16 @@ const stmt = await statementWithModel(
 console.log("\n[meeting] statement:", JSON.stringify(stmt));
 check(stmt !== null, "agent produced a validated meeting statement");
 check((stmt?.line.length ?? 0) > 8, "statement is a real sentence");
-if (stmt?.accuse) {
-  check(Object.keys(names).includes(stmt.accuse), "accusation maps back to a real agent key");
-}
+check(!((stmt as { accuse?: unknown } | null)?.accuse), "statement carries no accusation field");
 
 // --- 3. Imposter deflection ------------------------------------------------
 const impMind = createMind("imp:0", "imposter", ["imp:1"]);
 remember(impMind, {
   t: 30,
-  kind: "claim",
+  kind: "flag",
   actorKey: "crew:1",
   roomId: "cafeteria",
-  text: "ORION accused VEGA.",
+  text: "ORION was seen loitering near the vents.",
 });
 const impStmt = await statementWithModel(
   ai,
@@ -234,7 +235,7 @@ const impStmt = await statementWithModel(
 );
 console.log("\n[meeting] imposter line:", JSON.stringify(impStmt));
 check(impStmt !== null, "imposter produced a validated meeting statement");
-check(impStmt?.accuse !== "imp:1", "imposter never accuses its secret ally");
+check(!((impStmt as { accuse?: unknown } | null)?.accuse), "imposter statement carries no accusation field");
 
 console.log(`\nModel requests used: ${20 - ai.budget.remaining}`);
 if (failures > 0) {

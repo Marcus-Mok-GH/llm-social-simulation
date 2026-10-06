@@ -215,7 +215,11 @@ export interface CompleteOptions {
   maxTokens?: number;
   /** Ask the provider for strict JSON mode before falling back to plain text. */
   json?: boolean;
-  /** Override the reasoning effort. Defaults to "low" on Pollinations; "none" omits it. */
+  /**
+   * Override the reasoning effort. Defaults to "high" on every provider — the
+   * agents should think as hard as the models allow. "none" omits the field
+   * (also used by the retry path when a provider rejects it).
+   */
   reasoningEffort?: "none" | "low" | "medium" | "high";
 }
 
@@ -227,11 +231,10 @@ export async function complete(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
 
-  // Pollinations' reasoning models (GPT-5 Nano and friends) otherwise spend
-  // their whole completion budget thinking and emit nothing. Low effort bounds
-  // that; models without the field simply ignore it.
-  const requestedEffort =
-    opts.reasoningEffort ?? (cfg.provider === "pollinations" ? "low" : "none");
+  // Reasoning effort is maxed for every provider: the agents should think as
+  // hard as the model allows. Models without the field simply ignore it, and a
+  // provider that rejects it is retried below without it.
+  const requestedEffort = opts.reasoningEffort ?? "high";
   const effort = requestedEffort === "none" ? undefined : requestedEffort;
 
   const body: Record<string, unknown> = {
