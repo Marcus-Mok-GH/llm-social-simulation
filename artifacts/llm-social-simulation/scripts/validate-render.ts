@@ -53,7 +53,7 @@ try {
   process.exit(1);
 }
 
-const required = ["fillRect", "fillText", "arc", "fill", "stroke"] as const;
+const required = ["fillRect", "arc", "fill", "stroke"] as const;
 const missing = required.filter((name) => count(mapCalls, name) === 0);
 if (missing.length) {
   console.error(`drawMap did not call: ${missing.join(", ")}`);
@@ -70,8 +70,10 @@ if (count(mapCalls, "fill") < map.pointsOfInterest.length) {
   );
   process.exit(1);
 }
-if (count(mapCalls, "fillText") < map.rooms.length) {
-  console.error(`expected >= ${map.rooms.length} label fillText() calls`);
+// The official artwork already names every room, so the renderer must not
+// paint room-name/size text over the deck.
+if (count(mapCalls, "fillText") !== 0) {
+  console.error(`expected 0 label fillText() calls on the deck, got ${count(mapCalls, "fillText")}`);
   process.exit(1);
 }
 if (count(mapCalls, "setTransform") === 0) {
@@ -101,6 +103,12 @@ if (count(withActors, "ellipse") === 0) {
 }
 if (count(withActors, "arc") <= count(mapCalls, "arc")) {
   console.error("drawMap did not draw the player body (arc count unchanged)");
+  process.exit(1);
+}
+// Every actor is tagged with their name (the crew still need to be told which
+// avatar is which), so the actors pass is where screen-space text belongs.
+if (count(withActors, "fillText") < 1 + crewmates.length + imposters.length) {
+  console.error("drawMap did not tag the actors with their names");
   process.exit(1);
 }
 // Player + crew + imposters all get a shadow. An imposter is still on the

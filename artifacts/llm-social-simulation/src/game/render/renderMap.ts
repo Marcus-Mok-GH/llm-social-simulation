@@ -14,8 +14,6 @@ const COLORS = {
   space: "#05070d",
   /** Darkening laid over the official artwork so actors and fog read on it. */
   artTint: "rgba(4, 7, 14, 0.34)",
-  label: "#e2e8f3",
-  labelDim: "#93a3bd",
 } as const;
 
 const POI_COLORS: Record<PointOfInterest["kind"], string> = {
@@ -384,9 +382,10 @@ export interface Scene {
 
 /**
  * Draw the whole map into a canvas whose backing store is `cssW*dpr` by
- * `cssH*dpr`. World shapes are drawn under a scaled transform; labels are drawn
- * in screen space so text stays a constant, readable size. Fog is applied last
- * so labels and actors are occluded with the world.
+ * `cssH*dpr`. World shapes are drawn under a scaled transform; agent name
+ * tags are drawn in screen space so text stays a constant, readable size. The
+ * official artwork already labels every room, so no room names are painted
+ * here. Fog is applied last so labels and actors are occluded with the world.
  */
 export function drawMap(
   ctx: CanvasRenderingContext2D,
@@ -437,16 +436,6 @@ export function drawMap(
 
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  for (const r of map.rooms) {
-    const cx = sx(r.x + r.w / 2);
-    const cy = sy(r.y + r.h / 2) - 6;
-    ctx.fillStyle = COLORS.label;
-    ctx.font = '700 13px "JetBrains Mono", monospace';
-    ctx.fillText(r.name.toUpperCase(), cx, cy);
-    ctx.fillStyle = COLORS.labelDim;
-    ctx.font = '500 10px "JetBrains Mono", monospace';
-    ctx.fillText(`${r.w}×${r.h}`, cx, cy + 17);
-  }
 
   if (scene.player) {
     ctx.fillStyle = "rgba(203, 213, 225, 0.9)";
