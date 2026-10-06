@@ -51,6 +51,7 @@ export function memoryToLine(
     case "task":
       return `I saw ${who} working a console in ${where} — looked legit.`;
     case "claim":
+    case "flag":
       return m.text;
     case "report":
     case "eject":
@@ -77,7 +78,7 @@ export function heuristicStatement(
   ctx: { others: string[]; playerLine: string | null; turn?: number },
 ): Statement {
   const turn = ctx.turn ?? 0;
-  const priority: MemoryEntry["kind"][] = ["kill", "vent", "body", "sabotage", "sighted", "task"];
+  const priority: MemoryEntry["kind"][] = ["kill", "vent", "flag", "body", "sabotage", "sighted", "task"];
 
   for (const kind of priority) {
     const matches: MemoryEntry[] = [];

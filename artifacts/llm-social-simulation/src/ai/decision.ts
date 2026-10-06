@@ -26,7 +26,7 @@
  */
 
 import { complete, extractJson, type ChatMessage, type LlmConfig } from "./llm";
-import { rankSuspects, type Mind } from "../game/perception";
+import { type Mind } from "../game/perception";
 import { heuristicStatement, memoryDigest, type NameIndex, type Statement } from "../game/dialogue";
 import type { GameMap, RoomId } from "../game/map";
 import { roomById } from "../game/map";
@@ -123,7 +123,6 @@ export interface WorldView {
    * match is as available to the agent as the last second.
    */
   history: string[];
-  suspicions: { name: string; score: number }[];
   /** --- Persistent self-context, carried across decision ticks --- */
   /** The purpose the agent committed to last time it acted. */
   your_goal: string | null;
@@ -191,8 +190,8 @@ const INTERACTION_TYPES: InteractionType[] = ["TASK", "KILL", "FIX", "REPORT", "
 
 const INTENT_SCHEMA = [
   "Reply with ONLY a JSON object:",
-  '{"action":"<one of ' + INTENT_ACTIONS.join("|") + '>","target":"<zone name or interactable id>","interaction_type":"<one of ' + INTERACTION_TYPES.join("|") + '>","reasoning":"<=12 words"}',
-  'For MOVE, "target" is a zone name (prefer one of your valid_moves; the station will path you there).',
+  '{"action":"<one of ' + INTENT_ACTIONS.join("|") + '>","target":"<zone name, player name, or object id>","interaction_type":"<one of ' + INTERACTION_TYPES.join("|") + '>","reasoning":"<=12 words"}',
+  'For MOVE, "target" is where you want to go: a zone name, a player name, or an object id you know of (a console, repair panel, vent or body). The station walks you there.',
   'For INTERACT, "target" is an id from interactables and "interaction_type" says what to do; the station checks distance, game state and line of sight before it happens.',
   'For VENT, "target" is an optional vent id. SABOTAGE takes no target.',
   "Include only the fields your chosen action needs. No prose, no markdown.",
@@ -201,7 +200,8 @@ const INTENT_SCHEMA = [
 function systemPrompt(view: WorldView): string {
   const common = [
     "You move around a space station that is described to you as a graph of zones",
-    "(rooms joined by corridors). You pick a destination zone; the station walks you there.",
+    "(rooms joined by corridors). You name where to go — a zone, a player, or an",
+    "object — and the station walks you there.",
     "You act on objects and people with INTERACT. A referee verifies every action and, if it",
     "is rejected, tells you why in system_message on your next turn so you can correct it.",
     "You keep a memory between turns: your current goal, why you chose your last action, and",
@@ -242,7 +242,6 @@ function summarise(view: WorldView): Record<string, unknown> {
     you: view.self,
     yourTasks: view.tasks,
     others: view.others,
-    suspicion: view.suspicions,
     your_history: view.history,
     your_decisions: view.decision_history,
     your_goal: view.your_goal,
@@ -261,14 +260,6 @@ function summarise(view: WorldView): Record<string, unknown> {
   };
 }
 
-/** Resolve a model-supplied zone reference to a known graph node. */
-function resolveZone(view: WorldView, ref: string): ZoneRef | null {
-  const wanted = ref.trim().toLowerCase();
-  return (
-    view.zones.find((z) => z.id.toLowerCase() === wanted || z.name.toLowerCase() === wanted) ?? null
-  );
-}
-
 function validateIntent(raw: unknown, view: WorldView): Intent | null {
   if (typeof raw !== "object" || raw === null) return null;
   const obj = raw as Record<string, unknown>;
@@ -283,8 +274,10 @@ function validateIntent(raw: unknown, view: WorldView): Intent | null {
   switch (action.toUpperCase() as IntentAction) {
     case "MOVE": {
       if (!target) return null;
-      const zone = resolveZone(view, target);
-      return zone ? { action: "MOVE", target: zone.id, reasoning } : null;
+      // The engine resolves the reference — a zone, a player, an object or a
+      // body — and walks there. An unresolvable name comes back as
+      // system_message feedback on the agent's next turn.
+      return { action: "MOVE", target: target.trim().slice(0, 80), reasoning };
     }
     case "INTERACT": {
       if (!target || typeof obj.interaction_type !== "string") return null;
@@ -340,12 +333,12 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
       const prey = view.others.filter((o) => o.alive && !o.allied);
       const visible = prey.filter((o) => o.visible).sort((a, b) => b.isolation - a.isolation);
       if (visible.length > 0 && rand() < 0.8)
-        return { action: "MOVE", target: visible[0].zoneId, reasoning: "prey is visible and alone" };
+        return { action: "MOVE", target: visible[0].key, reasoning: "prey is visible and alone" };
       const isolated = [...prey].sort((a, b) => b.isolation - a.isolation);
       if (isolated.length > 0 && rand() < 0.7)
         return {
           action: "MOVE",
-          target: isolated[0].zoneId,
+          target: isolated[0].key,
           reasoning: "close on the most isolated crewmate",
         };
       if (view.vents.length > 0 && rand() < 0.35) {
@@ -363,7 +356,7 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
       const console = pickFrom(view.consoles);
       return {
         action: "MOVE",
-        target: console ? console.roomId : pickZone(),
+        target: console ? console.poiId : pickZone(),
         reasoning: "build an alibi while the kill recharges",
       };
     }
@@ -387,7 +380,7 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
       reasoning: "the hazard needs fixing now",
     };
   if (view.sabotage && rand() < 0.75) {
-    return { action: "MOVE", target: view.sabotage.fixRoomId, reasoning: "head to the repair panel" };
+    return { action: "MOVE", target: view.sabotage.fixPoiId, reasoning: "head to the repair panel" };
   }
 
   const task = ready("TASK");
@@ -410,7 +403,7 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
   const open = view.tasks.filter((t) => !t.done);
   if (open.length > 0) {
     const next = pickFrom(open);
-    if (next) return { action: "MOVE", target: next.roomId, reasoning: "next unfinished task" };
+    if (next) return { action: "MOVE", target: next.poiId, reasoning: "next unfinished task" };
   }
   if (view.bodyOutstanding && rand() < 0.5) {
     const visible = view.others.filter((o) => o.alive && o.visible);
@@ -535,9 +528,6 @@ export async function statementWithModel(
     youAreTraitor: mind.role === "imposter",
     secretAllies: mind.allies.map((k) => nameOf(names, k)),
     yourMemory: memoryDigest(map, mind, names),
-    yourSuspicion: rankSuspects(mind, 0)
-      .slice(0, 5)
-      .map((s) => ({ name: nameOf(names, s.key), score: Number(s.score.toFixed(2)) })),
     alive: input.others.map((k) => nameOf(names, k)),
     bodiesFound: input.bodiesFound,
     ejectedSoFar: input.ejectedSoFar.map((k) => nameOf(names, k)),
@@ -553,7 +543,7 @@ export async function statementWithModel(
       ejected: m.ejected ? m.ejected.name : null,
     })),
     instruction:
-      "This discussion is ongoing — build on the conversation so far and on what the human said (answer them directly if they spoke to you), and never repeat anything already said. Your vote will be calculated from your suspicion scores separately — only produce the spoken line and who you accuse.",
+      "This discussion is ongoing — build on the conversation so far and on what the human said (answer them directly if they spoke to you), and never repeat anything already said. Decide for yourself, from your own memory, who is worth accusing — only produce the spoken line and who you accuse.",
   };
 
   const release = await ctx.gate.acquire();

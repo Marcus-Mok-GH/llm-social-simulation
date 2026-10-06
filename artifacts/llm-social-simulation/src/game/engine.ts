@@ -48,7 +48,6 @@ import {
 import { heuristicStatement, type NameIndex, type Statement } from "./dialogue";
 import {
   createImposters,
-  imposterFakeTask,
   imposterGotoPoint,
   imposterHalt,
   imposterSeekVent,
@@ -77,7 +76,6 @@ import {
   type ZoneGraph,
 } from "./zones";
 import {
-  bump,
   createMind,
   decay,
   noteSighting,
@@ -808,7 +806,6 @@ export class GameEngine {
               roomId: room.id,
               text: `${tgt.name} used a vent in ${room.name}.`,
             });
-            bump(obs.mind, tgt.key, 0.6);
           }
         }
       }
@@ -816,40 +813,48 @@ export class GameEngine {
       for (const b of this.bodies) {
         if (obs.mind.bodiesSeen.has(b.id)) continue;
         if (!this.visible(obs, b.x, b.y)) continue;
+        const bodyRoom = roomAt(this.map, b.x, b.y);
         obs.mind.bodiesSeen.add(b.id);
         remember(obs.mind, {
           t,
           kind: "body",
           actorKey: b.key,
           roomId: b.roomId,
-          text: `Found ${b.name}'s body in ${roomAt(this.map, b.x, b.y).name}.`,
+          text: `Found ${b.name}'s body in ${bodyRoom.name}.`,
         });
 
-        // Someone loitering over the corpse is the obvious suspect.
+        // Someone loitering over the corpse is remembered as an incriminating
+        // circumstance; the belief follows from the memory, not from an
+        // engine-side score.
         for (const other of this.actors) {
           if (other === obs || !other.alive) continue;
           if (Math.hypot(other.entity.x - b.x, other.entity.y - b.y) > 80) continue;
           if (!this.los(b.x, b.y, other.entity.x, other.entity.y)) continue;
-          bump(obs.mind, other.key, 0.35);
+          remember(obs.mind, {
+            t,
+            kind: "flag",
+            actorKey: other.key,
+            roomId: b.roomId,
+            text: `${other.name} was standing right next to the body when I found it.`,
+          });
         }
 
-        // Inference, not observation: whoever this agent last saw heading into
-        // this room shortly before the discovery is the strongest lead there is.
-        // Only the most recent sighting gets the full weight — the rest is just
-        // noise from people who happened to be in the same room.
-        let bestKey: string | null = null;
-        let bestAt = -Infinity;
+        // Inference, not observation: whoever this agent last saw in this room
+        // shortly before the discovery is a lead worth remembering as-is; the
+        // agent weighs it when it reasons.
         for (const [key, seen] of Object.entries(obs.mind.lastSeen)) {
           if (key === obs.key || key === b.key) continue;
           if (seen.roomId !== b.roomId) continue;
           if (t - seen.t > 60) continue;
-          bump(obs.mind, key, 0.1);
-          if (seen.t > bestAt) {
-            bestAt = seen.t;
-            bestKey = key;
-          }
+          const seenName = this.names[key] ?? key;
+          remember(obs.mind, {
+            t,
+            kind: "flag",
+            actorKey: key,
+            roomId: b.roomId,
+            text: `The last place I saw ${seenName} was ${bodyRoom.name}, before I found the body.`,
+          });
         }
-        if (bestKey) bump(obs.mind, bestKey, 0.42);
 
         if (!obs.isPlayer && obs.role === "crew") {
           obs.bodyToReport = b.id;
@@ -922,7 +927,6 @@ export class GameEngine {
         roomId,
         text: `Watched ${killer.name} kill ${victim.name}.`,
       });
-      bump(w.mind, killer.key, 0.95);
       if (!w.isPlayer && w.role === "crew") {
         w.bodyToReport = body.id;
         w.repathAt = 0;
@@ -1260,9 +1264,6 @@ export class GameEngine {
       others,
       history,
       decision_history: decisionHistory,
-      suspicions: rankSuspects(a.mind, 0)
-        .slice(0, 5)
-        .map((s) => ({ name: this.names[s.key] ?? s.key, score: s.score })),
       // Persistent self-context, so the agent reasons between iterations
       // instead of waking up amnesiac every decision tick.
       your_goal: a.mind.goal,
@@ -1358,14 +1359,13 @@ export class GameEngine {
       }
     }
 
-    // Don't interrupt an agent that is mid-task: re-pathing a crewmate that is
-    // already standing at its console would cancel the work every cycle and the
-    // task bar would never move. Sabotage is the one thing worth interrupting for.
+    // Don't interrupt an agent that is mid-task: re-deciding while a crewmate
+    // is working a console would restart the same task every cycle and the
+    // task bar would never move. Everything else — including an agent that is
+    // still walking somewhere — is free to change its mind. A live sabotage is
+    // the one thing worth interrupting active work for.
     if (a.kind === "crew" && !this.sabotage) {
-      const c = a.entity as Crewmate;
-      const productive =
-        c.state === "working" || (c.state === "moving" && c.targetPoiId !== null);
-      if (productive) {
+      if ((a.entity as Crewmate).state === "working") {
         a.nextDecisionAt = this.time + 2.5;
         return;
       }
@@ -1414,10 +1414,45 @@ export class GameEngine {
   }
 
   /**
-   * Translate the model's node-graph decision into physical movement or a
-   * validated interaction. `MOVE` resolves a destination zone and lets A* walk
-   * the sprite to it; `INTERACT` is refused or executed by the engine referee;
-   * `VENT` and `SABOTAGE` are the traitor's engine-owned abilities.
+   * Resolve a `MOVE` target exactly as the agent expressed it: a point of
+   * interest id ("task_medbay", a repair panel, a vent), a body id, an actor
+   * (key or name), or a zone. The engine walks the agent to what it named —
+   * it never substitutes its own destination for the one the agent chose.
+   */
+  private resolveMoveTarget(
+    raw: string,
+  ):
+    | { kind: "poi"; poi: PointOfInterest }
+    | { kind: "body"; body: Body }
+    | { kind: "actor"; actor: Actor }
+    | { kind: "zone"; zone: Zone }
+    | null {
+    const wanted = raw.trim().toLowerCase();
+    if (!wanted) return null;
+
+    const poi = this.map.pointsOfInterest.find((p) => p.id.toLowerCase() === wanted);
+    if (poi) return { kind: "poi", poi };
+
+    const body = this.bodies.find((b) => String(b.id) === wanted);
+    if (body) return { kind: "body", body };
+
+    const actor = this.actors.find(
+      (o) => o.alive && (o.key.toLowerCase() === wanted || o.name.toLowerCase() === wanted),
+    );
+    if (actor) return { kind: "actor", actor };
+
+    const zone = zoneByRef(this.zones, raw);
+    if (zone) return { kind: "zone", zone };
+
+    return null;
+  }
+
+  /**
+   * Translate the model's decision into physical movement or a validated
+   * interaction. `MOVE` is executed exactly as the agent expressed it — the
+   * engine resolves the named destination and lets A* walk the sprite there,
+   * without substituting its own goal; `INTERACT` is refused or executed by
+   * the engine referee; `VENT` and `SABOTAGE` are the traitor's abilities.
    */
   private applyIntent(a: Actor, intent: Intent, source: ThoughtSource = "heuristic"): void {
     if (intent.action === "INTERACT") {
@@ -1464,105 +1499,53 @@ export class GameEngine {
       return;
     }
 
-    const zone = zoneByRef(this.zones, intent.target);
-    if (!zone) return;
-    a.mind.lastMove = zone.name;
+    // --- MOVE: executed exactly as the agent expressed it -----------------
+    const dest = this.resolveMoveTarget(intent.target);
+    if (!dest) {
+      // The agent named something that does not exist; explain on its next turn.
+      a.actionFeedback = `Action Failed: there is nothing called '${intent.target}' to walk to. Name a zone, a player, or an object (console, panel, vent, body).`;
+      return;
+    }
+    const label =
+      dest.kind === "poi"
+        ? dest.poi.label
+        : dest.kind === "body"
+          ? `${dest.body.name}'s body`
+          : dest.kind === "actor"
+            ? dest.actor.name
+            : dest.zone.name;
+    a.mind.lastMove = label;
+    this.recordDecision(a, `Move to ${label}`, `Moving to ${label}`, intent.reasoning, source);
 
     if (a.kind === "crew") {
       const c = a.entity as Crewmate;
-      // A live sabotage outranks routine work: head for the repair panel even
-      // if this room also holds a console the agent still owes.
-      if (this.sabotage) {
-        const fix = this.map.pointsOfInterest.find(
-          (p) =>
-            this.sabotage !== null &&
-            this.sabotage.fixPoiIds.includes(p.id) &&
-            zoneAtPoint(this.zones, this.map, p.x, p.y).id === zone.id,
-        );
-        if (fix) {
-          this.recordDecision(
-            a,
-            `Repair the ${this.sabotage.kind} in ${zone.name}`,
-            `Moving to ${zone.name} to repair the sabotage`,
-            intent.reasoning,
-            source,
-          );
-          crewmateGotoPoi(c, this.map, this.grid, fix.id);
-          return;
-        }
+      if (dest.kind === "poi") crewmateGotoPoi(c, this.map, this.grid, dest.poi.id);
+      else if (dest.kind === "body") crewmateGotoPoint(c, this.grid, dest.body.x, dest.body.y);
+      else if (dest.kind === "actor")
+        crewmateGotoPoint(c, this.grid, dest.actor.entity.x, dest.actor.entity.y);
+      else {
+        const pt = standPoint(this.map, dest.zone);
+        crewmateGotoPoint(c, this.grid, pt.x, pt.y);
       }
-      // Productive movement: if this zone holds a console the agent still owes
-      // work at, path straight to that console so arrival starts the task.
-      const owed = zone.taskPoiIds.find((id) =>
-        a.tasks.some((t) => t.poiId === id && !t.done),
-      );
-      if (owed) {
-        const label = a.tasks.find((t) => t.poiId === owed)?.label ?? owed;
-        this.recordDecision(
-          a,
-          `Work "${label}" in ${zone.name}`,
-          `Moving to ${zone.name} for "${label}"`,
-          intent.reasoning,
-          source,
-        );
-        crewmateGotoPoi(c, this.map, this.grid, owed);
-        return;
-      }
-      this.recordDecision(a, `Move to ${zone.name}`, `Moving to ${zone.name}`, intent.reasoning, source);
-      const pt = standPoint(this.map, zone);
-      crewmateGotoPoint(c, this.grid, pt.x, pt.y);
       return;
     }
 
     if (a.kind !== "imposter") return;
     const imp = a.entity as Imposter;
-
-    // Chase an AI crewmate who is currently in the destination zone.
-    const prey = this.actors.find(
-      (o) => o.kind === "crew" && o.alive && o.zoneId === zone.id,
-    );
-    if (prey) {
-      this.recordDecision(
-        a,
-        `Stalk ${prey.name} in ${zone.name}`,
-        `Stalking ${prey.name}`,
-        intent.reasoning,
-        source,
-      );
-      imposterStalk(imp, this.grid, this.crewmates, (prey.entity as Crewmate).id);
-      return;
+    if (dest.kind === "poi") imposterGotoPoint(imp, this.grid, dest.poi.x, dest.poi.y);
+    else if (dest.kind === "body") imposterGotoPoint(imp, this.grid, dest.body.x, dest.body.y);
+    else if (dest.kind === "actor") {
+      // Walking to a crewmate the agent named is pursuit; the state machine
+      // keeps following them once the path runs out.
+      if (dest.actor.kind === "crew") {
+        imposterStalk(imp, this.grid, this.crewmates, (dest.actor.entity as Crewmate).id);
+      } else {
+        imposterGotoPoint(imp, this.grid, dest.actor.entity.x, dest.actor.entity.y);
+      }
+    } else {
+      const pt = standPoint(this.map, dest.zone);
+      imposterGotoPoint(imp, this.grid, pt.x, pt.y);
     }
-    // The human player is not a Crewmate, so walk at their position directly.
-    const human = this.playerActor;
-    if (human.alive && human.role === "crew" && human.zoneId === zone.id) {
-      this.recordDecision(
-        a,
-        `Close on the player in ${zone.name}`,
-        "Chasing the player",
-        intent.reasoning,
-        source,
-      );
-      imposterGotoPoint(imp, this.grid, human.entity.x, human.entity.y);
-      return;
-    }
-    // Otherwise stand at a console in the zone for cover, or just walk there.
-    if (zone.taskPoiIds.length > 0) {
-      const label =
-        this.map.pointsOfInterest.find((p) => p.id === zone.taskPoiIds[0])?.label ??
-        zone.taskPoiIds[0];
-      this.recordDecision(
-        a,
-        `Fake work at "${label}" in ${zone.name} (alibi)`,
-        `Heading to fake a task in ${zone.name}`,
-        intent.reasoning,
-        source,
-      );
-      imposterFakeTask(imp, this.map, this.grid, zone.taskPoiIds[0]);
-      return;
-    }
-    this.recordDecision(a, `Move to ${zone.name}`, `Moving to ${zone.name}`, intent.reasoning, source);
-    const pt = standPoint(this.map, zone);
-    imposterGotoPoint(imp, this.grid, pt.x, pt.y);
   }
 
   /**
@@ -1959,18 +1942,28 @@ export class GameEngine {
     post(heuristicStatement(this.map, a.mind, { key: a.key, name: a.name }, this.names, input), "heuristic");
   }
 
-  /** Listeners adjust their beliefs when someone accuses someone else. */
+  /**
+   * Listeners remember who accused whom. Beliefs shift only because the
+   * accusation becomes part of each listener's own memory — the engine does
+   * not adjust anyone's suspicion directly.
+   */
   private applyAccusation(speaker: Actor, target: string, m: MeetingState): void {
     void m;
+    const targetName = this.names[target] ?? target;
+    const roomId = roomAt(this.map, speaker.entity.x, speaker.entity.y).id;
     for (const listener of this.living()) {
       if (listener === speaker) continue;
-      if (listener.role === "imposter") {
-        // Being pointed at is dangerous; so is anyone who points at your ally.
-        const accusedIsAlly = listener.mind.allies.includes(target);
-        bump(listener.mind, speaker.key, accusedIsAlly ? 0.5 : 0.18);
-      } else {
-        bump(listener.mind, target, 0.07);
-      }
+      const accusedIsAlly = listener.mind.allies.includes(target);
+      remember(listener.mind, {
+        t: this.time,
+        kind: "claim",
+        // An ally being pointed at makes the *speaker* the memorable party.
+        actorKey: accusedIsAlly ? speaker.key : target,
+        roomId,
+        text: accusedIsAlly
+          ? `${speaker.name} accused ${targetName} — someone to keep an eye on.`
+          : `${speaker.name} accused ${targetName}.`,
+      });
     }
   }
 

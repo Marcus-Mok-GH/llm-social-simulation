@@ -9,10 +9,16 @@
  * (gated by line of sight) and this module decides what that does to what they
  * believe.
  *
- * Suspicion is the single number that later drives both meeting dialogue and
- * the vote, which is what makes the social layer consistent: an agent that says
- * "I saw SHADE by the vent" is saying it *because* SHADE is who it suspects,
- * not because a dialogue table picked a line at random.
+ * Belief update rule: recording a memory is the only thing that moves
+ * suspicion, via the per-kind weights in `KIND_WEIGHT`. The engine decides
+ * *what* an agent observes (gated by line of sight) and this module decides
+ * what that does to what they believe — the engine itself never touches the
+ * suspicion scores, and no score is ever serialized into a model prompt.
+ *
+ * Suspicion still drives the offline dialogue and vote fallbacks, which is
+ * what keeps the social layer consistent: an agent that says "I saw SHADE by
+ * the vent" is saying it *because* SHADE is who it suspects, not because a
+ * dialogue table picked a line at random.
  */
 
 import type { RoomId } from "./map";
@@ -27,6 +33,7 @@ export type MemoryKind =
   | "sabotage"
   | "task"
   | "claim"
+  | "flag"
   | "report"
   | "eject";
 
@@ -113,6 +120,33 @@ export interface Mind {
   journal: DecisionEntry[];
 }
 
+/**
+ * How much each kind of first-hand observation moves the agent's suspicion of
+ * the actor the memory is about. This table is the *only* place beliefs are
+ * shaped: the engine records what an agent observed (`remember`), and the
+ * belief follows from the agent's own memory log. No engine code path adjusts
+ * suspicion directly, and no suspicion value is ever handed to the models —
+ * they see the raw events in their history and reason from those.
+ */
+const KIND_WEIGHT: Record<MemoryKind, number> = {
+  /** Watched them murder someone. */
+  kill: 0.95,
+  /** Watched them use a vent. */
+  vent: 0.6,
+  /** Incriminating circumstance (loitering by a body, last seen in the room). */
+  flag: 0.35,
+  /** Someone accused them during a meeting. */
+  claim: 0.2,
+  /** Attribution of a triggered sabotage. */
+  sabotage: 0.3,
+  /** Neutral context: these memories inform reasoning, not suspicion. */
+  sighted: 0,
+  body: 0,
+  task: 0,
+  report: 0,
+  eject: 0,
+};
+
 const BASELINE = 0.05;
 
 export function createMind(key: string, role: Role, allies: string[] = []): Mind {
@@ -174,13 +208,23 @@ export function rememberMeeting(mind: Mind, entry: MeetingMemory): void {
   mind.meetings.push(entry);
 }
 
-/** Bank a notable observation for the whole match (append-only). */
+/**
+ * Bank a notable observation for the whole match (append-only). Recording an
+ * observation is also what moves the agent's belief about the actor it is
+ * about: the weight comes from what was observed (the memory kind), never
+ * from an engine override.
+ */
 export function remember(mind: Mind, entry: MemoryEntry): void {
   mind.memories.push(entry);
+  const weight = KIND_WEIGHT[entry.kind];
+  if (weight > 0) bump(mind, entry.actorKey, weight);
 }
 
-/** Bounded add so a single event can never make suspicion saturate. */
-export function bump(mind: Mind, target: string, delta: number): void {
+/**
+ * Bounded add so a single event can never make suspicion saturate. Internal:
+ * outside this module, beliefs change only through `remember`.
+ */
+function bump(mind: Mind, target: string, delta: number): void {
   if (target === mind.key) return;
   if (mind.allies.includes(target)) return;
   const current = mind.suspicion[target] ?? BASELINE;
@@ -217,8 +261,9 @@ export function topSuspect(mind: Mind, threshold = 0.15): Suspect | null {
 }
 
 /**
- * Full ranking, used by the analyst overlay and by the LLM prompt builder.
- * `min` filters out the noise floor so callers only see meaningful leads.
+ * Full ranking, used by the analyst overlay and by the offline dialogue and
+ * vote fallbacks. `min` filters out the noise floor so callers only see
+ * meaningful leads. Never serialized into a model prompt.
  */
 export function rankSuspects(mind: Mind, min = 0): Suspect[] {
   return Object.entries(mind.suspicion)

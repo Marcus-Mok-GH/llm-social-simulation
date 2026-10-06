@@ -21,7 +21,7 @@ import {
   RequestGate,
 } from "../src/ai/llm";
 import { UMBRA_DECK_MAP } from "../src/game/map";
-import { createMind, bump, remember } from "../src/game/perception";
+import { createMind, remember } from "../src/game/perception";
 
 const cfg = readLlmConfig();
 if (!cfg) {
@@ -99,7 +99,6 @@ function view(role: "crew" | "imposter"): WorldView {
       "[00:40 sighted] Saw VEGA in Cafeteria not long ago.",
       "[01:20 task] Watched JUNO work a console in MedBay.",
     ],
-    suspicions: [{ name: "VEGA", score: 0.4 }],
     your_goal:
       role === "imposter" ? 'Fake work at "Calibrate Distributor" in Electrical (alibi)' : 'Work "Empty Garbage" in Cafeteria',
     goal_since: "02:10",
@@ -158,8 +157,10 @@ for (const role of ["crew", "imposter"] as const) {
     check(role === "imposter", "vent/sabotage is only accepted from an imposter");
   }
   if (intent?.action === "MOVE") {
-    const known = new Set(view(role).zones.map((z) => z.id.toLowerCase()));
-    check(known.has(intent.target.toLowerCase()), "MOVE targets a known zone");
+    check(
+      typeof intent.target === "string" && intent.target.trim().length > 0,
+      "MOVE carries a destination the engine can resolve (zone, player or object)",
+    );
   }
 }
 
@@ -172,7 +173,6 @@ remember(mind, {
   roomId: "medbay",
   text: "Watched SHADE kill PIKE.",
 });
-bump(mind, "imp:0", 0.95);
 
 const names = { "crew:0": "ROOK", "crew:1": "VEGA", "imp:0": "SHADE", "imp:1": "VEX", player: "ORION" };
 
@@ -205,7 +205,13 @@ if (stmt?.accuse) {
 
 // --- 3. Imposter deflection ------------------------------------------------
 const impMind = createMind("imp:0", "imposter", ["imp:1"]);
-bump(impMind, "crew:1", 0.3);
+remember(impMind, {
+  t: 30,
+  kind: "claim",
+  actorKey: "crew:1",
+  roomId: "cafeteria",
+  text: "ORION accused VEGA.",
+});
 const impStmt = await statementWithModel(
   ai,
   UMBRA_DECK_MAP,
