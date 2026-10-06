@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Rocket, Skull, Trophy } from "lucide-react";
+import { Ghost, Rocket, Skull, Trophy } from "lucide-react";
 import type { Snapshot } from "@/game/engine";
 import { describeMatch, type MatchRecord } from "@/game/persistence";
 import { cn } from "@/lib/utils";
@@ -19,10 +19,12 @@ interface BriefingProps {
   /** Show touch control hints instead of the keyboard legend. */
   compact?: boolean;
   onStart: () => void;
+  /** Start the match as a spectator: no avatar, full vision, AI only. */
+  onSpectate: () => void;
 }
 
 /** Pre-match role reveal: who you are, who else is on the deck. */
-export function Briefing({ role, roster, compact = false, onStart }: BriefingProps) {
+export function Briefing({ role, roster, compact = false, onStart, onSpectate }: BriefingProps) {
   const imposter = role === "imposter";
   return (
     <div className="absolute inset-0 z-30 flex items-start justify-center overflow-y-auto bg-void-950/92 px-3 py-4 sm:px-4 sm:py-6">
@@ -67,14 +69,24 @@ export function Briefing({ role, roster, compact = false, onStart }: BriefingPro
           ))}
         </ul>
 
-        <button
-          type="button"
-          onClick={onStart}
-          className="mt-6 inline-flex items-center gap-2 rounded-lg bg-signal px-6 py-3 text-sm font-bold tracking-wider text-void-950 transition hover:bg-signal/90"
-        >
-          <Rocket className="h-4 w-4" />
-          BEGIN SHIFT
-        </button>
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={onStart}
+            className="inline-flex items-center gap-2 rounded-lg bg-signal px-6 py-3 text-sm font-bold tracking-wider text-void-950 transition hover:bg-signal/90"
+          >
+            <Rocket className="h-4 w-4" />
+            BEGIN SHIFT
+          </button>
+          <button
+            type="button"
+            onClick={onSpectate}
+            className="inline-flex items-center gap-2 rounded-lg border border-[#a78bfa]/50 bg-[#a78bfa]/10 px-5 py-3 text-sm font-bold tracking-wider text-[#c4b5fd] transition hover:bg-[#a78bfa]/20"
+          >
+            <Ghost className="h-4 w-4" />
+            SPECTATE
+          </button>
+        </div>
         <p className="mt-3 text-[10px] tracking-widest text-slate-600">
           {compact
             ? "DRAG THE STICK TO MOVE · USE INTERACTS · TAP REPORT"

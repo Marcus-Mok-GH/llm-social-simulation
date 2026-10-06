@@ -149,6 +149,12 @@ const TRANSCRIPT_WINDOW = 14;
  * movement-intent loop alone consumed.
  */
 const LLM_BUDGET = 240;
+/**
+ * How many agent thoughts the feed keeps. Sized to outlive a full match's
+ * decision volume so entries are actually evicted (the ring property is
+ * observable), while old entries fall off the front during long matches.
+ */
+const THOUGHT_FEED_MAX = 24;
 
 export type Phase = "briefing" | "playing" | "meeting" | "ended";
 export type Winner = "crew" | "imposter" | null;
@@ -176,6 +182,24 @@ export interface Body {
   x: number;
   y: number;
   roomId: RoomId;
+}
+
+/**
+ * One entry in the spectator thought feed: what an AI agent just decided to
+ * do and, in its own words, why. Written by `recordDecision` — the single
+ * choke point every intent (model or heuristic) passes through.
+ */
+export interface ThoughtEntry {
+  id: number;
+  /** Simulation time in seconds. */
+  t: number;
+  key: string;
+  name: string;
+  color: string;
+  /** One-line summary of the action the agent took. */
+  action: string;
+  /** The agent's own reasoning, or null when it did not offer one. */
+  reasoning: string | null;
 }
 
 export type EntityKind = "player" | "crew" | "imposter";
@@ -302,6 +326,10 @@ export interface Snapshot {
   ejects: number;
   analyst: { key: string; name: string; color: string; top: string; score: number }[] | null;
   activeTask: { poiId: string; label: string; room: string; kind: "wiring" | "calibration" } | null;
+  /** True while the player has left the match to watch with full vision. */
+  spectator: boolean;
+  /** The agent thought feed, oldest first. */
+  thoughts: ThoughtEntry[];
 }
 
 export interface EngineOptions {
@@ -358,6 +386,11 @@ export class GameEngine {
   messages: ChatMessage[] = [];
 
   analystView = false;
+  /** Spectator mode: the player has left the match and watches with full vision. */
+  spectator = false;
+  /** Agent thought feed (ring buffer, oldest first) for the UI. */
+  thoughts: ThoughtEntry[] = [];
+  private nextThoughtId = 1;
   llmEnabled: boolean;
   /** Set by the UI so the match can be written to history when it ends. */
   onMatchEnd: ((winner: "crew" | "imposter") => void) | null = null;
@@ -618,6 +651,7 @@ export class GameEngine {
   // -- public control ------------------------------------------------------
 
   setKey(key: string, down: boolean): void {
+    if (down && this.spectator) return;
     if (down) this.keys.add(key);
     else this.keys.delete(key);
   }
@@ -632,11 +666,40 @@ export class GameEngine {
     return this.touchMove ?? keys;
   }
 
-  begin(): void {
+  /**
+   * Start the match. Pass `spectate` to sit the match out entirely: the player
+   * leaves the roster (reusing the dead-player rules) and watches the AI play
+   * with the whole deck visible.
+   */
+  begin(spectate = false): void {
     if (this.phase !== "briefing") return;
     this.phase = "playing";
     this.startedAt = Date.now();
     this.system("Match started — find the imposters or finish the tasks.");
+    if (spectate) this.enterSpectator();
+  }
+
+  /**
+   * Spectator mode: one-way per match. The player departs the living roster —
+   * which is exactly the dead-player path — so every existing rule applies for
+   * free: no kill target, no witness, no sightings, no meeting seat, no task
+   * credit and no win-count weight. Only the input/interaction guards below
+   * and the renderer's fog gate (full vision) are spectator-specific.
+   */
+  enterSpectator(): void {
+    if (this.spectator || this.phase === "ended") return;
+    this.spectator = true;
+    const me = this.playerActor;
+    me.alive = false;
+    this.keys.clear();
+    this.touchMove = null;
+    this.activeTask = null;
+    // The task bar must stay reachable without the departed player's quota.
+    this.syncTaskBudget();
+    const ended = this.checkWin();
+    if (!ended) {
+      this.note("You left the match — spectating with full deck vision.");
+    }
   }
 
   // -- perception ----------------------------------------------------------
@@ -848,6 +911,7 @@ export class GameEngine {
 
   triggerSabotage(kind?: SabotageKind): boolean {
     if (this.phase !== "playing" || this.sabotage || this.sabotageCooldown > 0) return false;
+    if (!this.playerActor.alive) return false;
     const chosen: SabotageKind =
       kind ?? (this.rng.chance(0.5) ? "meltdown" : "blackout");
 
@@ -1447,6 +1511,18 @@ export class GameEngine {
     reasoning?: string,
   ): void {
     setGoal(a.mind, goal, this.time, reasoning ?? null, action);
+    // Feed the spectator thought log. Every intent passes through here, so
+    // heuristic fallbacks and model decisions both show up.
+    this.thoughts.push({
+      id: this.nextThoughtId++,
+      t: this.time,
+      key: a.key,
+      name: a.name,
+      color: a.color,
+      action,
+      reasoning: reasoning ?? null,
+    });
+    if (this.thoughts.length > THOUGHT_FEED_MAX) this.thoughts.shift();
   }
 
   // -- interaction validation ----------------------------------------------
@@ -1809,6 +1885,7 @@ export class GameEngine {
   }
 
   playerSay(text: string): void {
+    if (this.spectator) return;
     const m = this.meeting;
     if (!m || m.stage !== "discussion") return;
     const trimmed = text.trim().slice(0, 200);
@@ -1840,6 +1917,7 @@ export class GameEngine {
   }
 
   playerVote(targetKey: string | null): void {
+    if (this.spectator) return;
     const m = this.meeting;
     if (!m || m.stage !== "voting") return;
     m.votes["player"] = targetKey;
@@ -2013,7 +2091,9 @@ export class GameEngine {
   prompt(): string | null {
     if (this.phase !== "playing") return null;
     const me = this.playerActor;
-    if (!me.alive) return "SPECTATING — you are dead";
+    if (!me.alive) {
+      return this.spectator ? "SPECTATING — full station vision" : "SPECTATING — you are dead";
+    }
 
     const nearBody = this.bodies.some(
       (b) => Math.hypot(b.x - this.player.x, b.y - this.player.y) <= INTERACT_RANGE,
@@ -2131,7 +2211,8 @@ export class GameEngine {
 
     // --- playing ----------------------------------------------------------
     const playerActor = this.playerActor;
-    updatePlayer(this.map, this.player, this.moveInput(), dt);
+    // A spectator's avatar is a ghost: it never moves and never reveals.
+    if (!this.spectator) updatePlayer(this.map, this.player, this.moveInput(), dt);
     if (playerActor.alive) revealAround(this.vis, this.player.x, this.player.y, 140);
 
     const livingCrew = this.crewmates.filter((c) => {
@@ -2312,6 +2393,8 @@ export class GameEngine {
       explored: this.vis.explored.reduce((n, v) => n + v, 0) / this.vis.explored.length,
       meetings: this.meetingsHeld,
       ejects: this.ejects,
+      spectator: this.spectator,
+      thoughts: [...this.thoughts],
       analyst: this.analystView
         ? this.actors
             .filter((a) => a.alive)

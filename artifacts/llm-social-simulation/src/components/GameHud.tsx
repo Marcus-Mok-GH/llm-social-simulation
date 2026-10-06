@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Eye } from "lucide-react";
+import { Eye, Ghost } from "lucide-react";
 import type { Snapshot } from "@/game/engine";
 import { cn } from "@/lib/utils";
 
@@ -9,6 +9,8 @@ interface GameHudProps {
   compact?: boolean;
   analyst: boolean;
   onToggleAnalyst: () => void;
+  spectator: boolean;
+  onToggleSpectate: () => void;
 }
 
 function Chip({
@@ -58,6 +60,8 @@ export function GameHud({
   compact = false,
   analyst,
   onToggleAnalyst,
+  spectator,
+  onToggleSpectate,
 }: GameHudProps) {
   const isImposter = snap.role === "imposter";
   const aliveCount = snap.alive.crew + snap.alive.imposter;
@@ -120,13 +124,18 @@ export function GameHud({
           <span
             className={cn(
               "rounded-full border px-3 py-1 text-[10px] font-bold tracking-[0.2em]",
-              isImposter
-                ? "border-[#ff4d6a]/60 bg-[#ff4d6a]/15 text-[#ff8a9c]"
-                : "border-signal/50 bg-signal/10 text-signal",
+              spectator
+                ? "border-[#a78bfa]/60 bg-[#a78bfa]/15 text-[#c4b5fd]"
+                : isImposter
+                  ? "border-[#ff4d6a]/60 bg-[#ff4d6a]/15 text-[#ff8a9c]"
+                  : "border-signal/50 bg-signal/10 text-signal",
             )}
           >
-            {isImposter ? "IMPOSTER" : "CREW"} · {snap.playerName} ·{" "}
-            {snap.playerAlive ? `${aliveCount} ALIVE` : "DEAD"}
+            {spectator
+              ? `SPECTATOR · ${snap.playerName} · FULL VISION`
+              : `${isImposter ? "IMPOSTER" : "CREW"} · ${snap.playerName} · ${
+                  snap.playerAlive ? `${aliveCount} ALIVE` : "DEAD"
+                }`}
           </span>
         </div>
 
@@ -138,6 +147,14 @@ export function GameHud({
           >
             <Eye className="h-3 w-3" />
             ANALYST
+          </Chip>
+          <Chip
+            active={spectator}
+            onClick={onToggleSpectate}
+            title={spectator ? "Spectating — restart to play again" : "Leave the match and watch with full deck vision"}
+          >
+            <Ghost className="h-3 w-3" />
+            {spectator ? "SPECTATING" : "SPECTATE"}
           </Chip>
         </div>
       </div>

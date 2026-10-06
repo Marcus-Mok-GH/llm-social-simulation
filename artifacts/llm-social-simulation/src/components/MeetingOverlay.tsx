@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils";
 
 interface MeetingOverlayProps {
   meeting: MeetingView;
+  /** Spectators watch the meeting read-only: no speech, no vote, no skip. */
+  spectator?: boolean;
   onSay: (text: string) => void;
   onVote: (key: string | null) => void;
   onAdvance: () => void;
@@ -124,10 +126,16 @@ function VoteCard({
   );
 }
 
-export function MeetingOverlay({ meeting, onSay, onVote, onAdvance }: MeetingOverlayProps) {
+export function MeetingOverlay({
+  meeting,
+  spectator = false,
+  onSay,
+  onVote,
+  onAdvance,
+}: MeetingOverlayProps) {
   const [draft, setDraft] = useState("");
-  const canSpeak = meeting.stage === "discussion";
-  const canVote = meeting.stage === "voting";
+  const canSpeak = meeting.stage === "discussion" && !spectator;
+  const canVote = meeting.stage === "voting" && !spectator;
 
   const send = () => {
     if (!draft.trim()) return;
@@ -201,6 +209,11 @@ export function MeetingOverlay({ meeting, onSay, onVote, onAdvance }: MeetingOve
             {canVote && (
               <p className="text-[11px] leading-relaxed text-slate-500">
                 Your vote comes from your own suspicion — pick who you trust least.
+              </p>
+            )}
+            {spectator && (meeting.stage === "discussion" || meeting.stage === "voting") && (
+              <p className="text-[11px] leading-relaxed text-[#c4b5fd]/80">
+                You are spectating — the agents run this meeting on their own.
               </p>
             )}
           </div>

@@ -10,6 +10,7 @@ import { GameHud } from "./GameHud";
 import { Briefing, EndScreen, type RosterRow } from "./GameOverlays";
 import { MeetingOverlay } from "./MeetingOverlay";
 import { TaskModal } from "./TaskModal";
+import { ThoughtFeed } from "./ThoughtFeed";
 import { TouchControls } from "./TouchControls";
 import { cn } from "@/lib/utils";
 
@@ -181,13 +182,15 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
       drawMap(ctx, UMBRA_DECK_MAP, cssW, cssH, dpr, {
         biasY,
         background: bg.complete && bg.naturalWidth > 0 ? bg : null,
-        player: engine.player,
+        // A spectator watches the station itself: no avatar, and the fog gate
+        // below lifts so the whole deck (and everyone on it) is visible.
+        player: engine.spectator ? null : engine.player,
         playerAlive: engine.playerActor.alive,
         crewmates: engine.crewmates.filter((c) => alive.has(c)),
         imposters: engine.imposters.filter((i) => alive.has(i)),
         bodies: engine.bodies,
         fog:
-          engine.phase === "playing"
+          engine.phase === "playing" && !engine.spectator
             ? { polygon: engine.visionPolygon(), grid: engine.vis }
             : null,
         revealRoles: engine.analystView,
@@ -268,80 +271,103 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
   };
 
   return (
-    <div className={cn("relative", className)}>
-      <div ref={wrapRef} className="w-full">
-        <canvas
-          ref={canvasRef}
-          role="img"
-          aria-label="The Skeld deck map — a playable social-deduction match with fog of war"
-          className="block w-full rounded-xl border border-void-700 bg-void-950"
+    <div className={cn(className)}>
+      <div className="relative">
+        <div ref={wrapRef} className="w-full">
+          <canvas
+            ref={canvasRef}
+            role="img"
+            aria-label="The Skeld deck map — a playable social-deduction match with fog of war"
+            className="block w-full rounded-xl border border-void-700 bg-void-950"
+          />
+        </div>
+
+        <GameHud
+          snap={snap}
+          compact={isMobile}
+          analyst={analyst}
+          onToggleAnalyst={() => {
+            engine.analystView = !engine.analystView;
+            setAnalyst(engine.analystView);
+            sync();
+          }}
+          spectator={snap.spectator}
+          onToggleSpectate={() => {
+            engine.enterSpectator();
+            sync();
+          }}
         />
+
+        {isMobile &&
+          snap.phase === "playing" &&
+          !snap.spectator &&
+          !snap.meeting &&
+          !snap.activeTask && <TouchControls engine={engine} snap={snap} onAction={sync} />}
+
+        {snap.phase === "briefing" && (
+          <Briefing
+            role={snap.role}
+            roster={roster}
+            compact={isMobile}
+            onStart={() => {
+              engine.begin();
+              sync();
+            }}
+            onSpectate={() => {
+              engine.begin(true);
+              sync();
+            }}
+          />
+        )}
+
+        {snap.meeting && (
+          <MeetingOverlay
+            meeting={snap.meeting}
+            spectator={snap.spectator}
+            onSay={(text) => {
+              engine.playerSay(text);
+              sync();
+            }}
+            onVote={(key) => {
+              engine.playerVote(key);
+              sync();
+            }}
+            onAdvance={() => {
+              engine.advanceMeeting();
+              sync();
+            }}
+          />
+        )}
+
+        {snap.activeTask && (
+          <TaskModal
+            label={snap.activeTask.label}
+            room={snap.activeTask.room}
+            kind={snap.activeTask.kind}
+            onComplete={() => {
+              engine.completeActiveTask();
+              sync();
+            }}
+            onFail={() => {
+              engine.cancelActiveTask();
+              sync();
+            }}
+          />
+        )}
+
+        {snap.phase === "ended" && (
+          <EndScreen snap={snap} history={history ?? []} onRestart={restart} />
+        )}
       </div>
 
-      <GameHud
-        snap={snap}
+      {/* The thought feed lives in normal flow below the deck (and below the
+          meeting/end overlays), so it never fights the HUD for map space. */}
+      <ThoughtFeed
+        className="mt-3"
+        thoughts={snap.thoughts}
+        spectator={snap.spectator}
         compact={isMobile}
-        analyst={analyst}
-        onToggleAnalyst={() => {
-          engine.analystView = !engine.analystView;
-          setAnalyst(engine.analystView);
-          sync();
-        }}
       />
-
-      {isMobile && snap.phase === "playing" && !snap.meeting && !snap.activeTask && (
-        <TouchControls engine={engine} snap={snap} onAction={sync} />
-      )}
-
-      {snap.phase === "briefing" && (
-        <Briefing
-          role={snap.role}
-          roster={roster}
-          compact={isMobile}
-          onStart={() => {
-            engine.begin();
-            sync();
-          }}
-        />
-      )}
-
-      {snap.meeting && (
-        <MeetingOverlay
-          meeting={snap.meeting}
-          onSay={(text) => {
-            engine.playerSay(text);
-            sync();
-          }}
-          onVote={(key) => {
-            engine.playerVote(key);
-            sync();
-          }}
-          onAdvance={() => {
-            engine.advanceMeeting();
-            sync();
-          }}
-        />
-      )}
-
-      {snap.activeTask && (
-        <TaskModal
-          label={snap.activeTask.label}
-          room={snap.activeTask.room}
-          kind={snap.activeTask.kind}
-          onComplete={() => {
-            engine.completeActiveTask();
-            sync();
-          }}
-          onFail={() => {
-            engine.cancelActiveTask();
-            sync();
-          }}
-        />
-      )}
-
-      {snap.phase === "ended" && (
-        <EndScreen snap={snap} history={history ?? []} onRestart={restart} />
-      )}
     </div>
   );
 }

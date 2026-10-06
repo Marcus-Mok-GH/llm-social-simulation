@@ -12,6 +12,7 @@
     "typecheck": "tsc -p artifacts/llm-social-simulation/tsconfig.json --noEmit",
     "validate:map": "cd artifacts/llm-social-simulation && bun scripts/validate-map.ts",
     "validate:render": "cd artifacts/llm-social-simulation && bun scripts/validate-render.ts",
+    "validate:spectator": "cd artifacts/llm-social-simulation && bun scripts/validate-spectator.ts",
     "validate:movement": "cd artifacts/llm-social-simulation && bun scripts/validate-movement.ts",
     "validate:touch": "cd artifacts/llm-social-simulation && bun scripts/validate-touch.ts",
     "validate:ai": "cd artifacts/llm-social-simulation && bun scripts/validate-ai.ts",
@@ -20,7 +21,7 @@
     "validate:ui": "cd artifacts/llm-social-simulation && bun scripts/validate-ui.tsx",
     "simulate": "cd artifacts/llm-social-simulation && bun scripts/simulate.ts",
     "verify:llm": "cd artifacts/llm-social-simulation && bun scripts/verify-llm.ts",
-    "check": "pnpm run typecheck && pnpm run validate:map && pnpm run validate:movement && pnpm run validate:touch && pnpm run validate:render && pnpm run validate:ui && pnpm run validate:ai && pnpm run validate:interactions && pnpm run validate:imposters && pnpm run simulate"
+    "check": "pnpm run typecheck && pnpm run validate:map && pnpm run validate:movement && pnpm run validate:touch && pnpm run validate:render && pnpm run validate:spectator && pnpm run validate:ui && pnpm run validate:ai && pnpm run validate:interactions && pnpm run validate:imposters && pnpm run simulate"
   },
   "dependencies": {
     "@replit/connectors-sdk": "^0.4.3",
