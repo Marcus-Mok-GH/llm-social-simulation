@@ -6,7 +6,7 @@ import { rankSuspects } from "@/game/perception";
 import { saveMatch, type MatchRecord } from "@/game/persistence";
 import { drawMap } from "@/game/render/renderMap";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { GameHud } from "./GameHud";
+import { GameHud, TaskRail } from "./GameHud";
 import { Briefing, EndScreen, type RosterRow } from "./GameOverlays";
 import { MeetingOverlay } from "./MeetingOverlay";
 import { TaskModal } from "./TaskModal";
@@ -278,30 +278,42 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
   return (
     <div className={cn(className)}>
       <div className="relative">
-        <div ref={wrapRef} className="w-full">
-          <canvas
-            ref={canvasRef}
-            role="img"
-            aria-label="The Skeld deck map — a playable social-deduction match with fog of war"
-            className="block w-full rounded-xl border border-void-700 bg-void-950"
-          />
-        </div>
+        <div className="flex items-stretch gap-3">
+          {/* Deck column: the canvas plus the HUD, which only overlays this
+              column — the task rail beside it must stay outside that scope. */}
+          <div className="relative min-w-0 flex-1">
+            <div ref={wrapRef} className="w-full">
+              <canvas
+                ref={canvasRef}
+                role="img"
+                aria-label="The Skeld deck map — a playable social-deduction match with fog of war"
+                className="block w-full rounded-xl border border-void-700 bg-void-950"
+              />
+            </div>
 
-        <GameHud
-          snap={snap}
-          compact={isMobile}
-          analyst={analyst}
-          onToggleAnalyst={() => {
-            engine.analystView = !engine.analystView;
-            setAnalyst(engine.analystView);
-            sync();
-          }}
-          spectator={snap.spectator}
-          onToggleSpectate={() => {
-            engine.enterSpectator();
-            sync();
-          }}
-        />
+            <GameHud
+              snap={snap}
+              compact={isMobile}
+              analyst={analyst}
+              onToggleAnalyst={() => {
+                engine.analystView = !engine.analystView;
+                setAnalyst(engine.analystView);
+                sync();
+              }}
+              spectator={snap.spectator}
+              onToggleSpectate={() => {
+                engine.enterSpectator();
+                sync();
+              }}
+            />
+          </div>
+
+          {/* The player's task list sits beside the deck on desktop so it
+              never covers the map; phones keep the collapsible HUD chip. */}
+          {!isMobile && (
+            <TaskRail tasks={snap.tasks} isImposter={snap.role === "imposter"} />
+          )}
+        </div>
 
         {isMobile &&
           snap.phase === "playing" &&

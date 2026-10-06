@@ -253,44 +253,12 @@ export function GameHud({
         </div>
       )}
 
-      {/* Tasks + prompt (desktop) / prompt above touch controls (compact) */}
+      {/* Prompt + controls (desktop) / prompt above touch controls (compact) */}
       <div
         className={cn("absolute inset-x-0 bottom-0 p-3", compact && "pb-32")}
       >
         {!compact && (
           <div className="flex flex-wrap items-end justify-between gap-3">
-            <div className="w-64 max-w-full rounded-lg border border-void-700 bg-void-950/80 p-3 backdrop-blur-sm">
-              <p className="mb-2 text-[10px] tracking-[0.2em] text-slate-500">YOUR TASKS</p>
-              {snap.tasks.length === 0 ? (
-                <p className="text-[11px] text-slate-600">
-                  {isImposter ? "Blend in. Fake everything." : "No assignments."}
-                </p>
-              ) : (
-                <ul className="space-y-1.5">
-                  {snap.tasks.map((t) => (
-                    <li
-                      key={t.poiId}
-                      className={cn(
-                        "flex items-start gap-2 text-[11px]",
-                        t.done ? "text-slate-600 line-through" : "text-slate-300",
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
-                          t.done ? "bg-signal" : "bg-hazard",
-                        )}
-                      />
-                      <span>
-                        {t.label}
-                        <span className="block text-[10px] text-slate-600">{t.room}</span>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
             <div className="flex-1 text-center">
               {snap.prompt && (
                 <span className="inline-block rounded-lg border border-signal/40 bg-void-950/85 px-4 py-2 text-xs tracking-widest text-signal backdrop-blur-sm">
@@ -370,5 +338,58 @@ export function GameHud({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Desktop task rail: a slim card parked beside the deck (outside the canvas)
+ * instead of overlaying it, so the list never covers the map. Phones keep the
+ * collapsible chip in the HUD instead.
+ */
+export function TaskRail({
+  tasks,
+  isImposter,
+}: {
+  tasks: Snapshot["tasks"];
+  isImposter: boolean;
+}) {
+  const done = tasks.filter((t) => t.done).length;
+  return (
+    <aside className="w-44 shrink-0 self-start rounded-lg border border-void-700 bg-void-950/80 p-2.5 backdrop-blur-sm">
+      <p className="mb-1.5 flex items-baseline justify-between text-[10px] tracking-[0.2em] text-slate-500">
+        <span>YOUR TASKS</span>
+        <span className="text-signal">
+          {done}/{tasks.length}
+        </span>
+      </p>
+      {tasks.length === 0 ? (
+        <p className="text-[10px] leading-snug text-slate-600">
+          {isImposter ? "Blend in. Fake everything." : "No assignments."}
+        </p>
+      ) : (
+        <ul className="space-y-1">
+          {tasks.map((t) => (
+            <li
+              key={t.poiId}
+              className={cn(
+                "flex items-start gap-1.5 text-[10px] leading-snug",
+                t.done ? "text-slate-600 line-through" : "text-slate-300",
+              )}
+            >
+              <span
+                className={cn(
+                  "mt-1 h-1 w-1 shrink-0 rounded-full",
+                  t.done ? "bg-signal" : "bg-hazard",
+                )}
+              />
+              <span>
+                {t.label}
+                <span className="block text-[9px] text-slate-600">{t.room}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </aside>
   );
 }
