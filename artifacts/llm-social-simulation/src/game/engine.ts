@@ -155,6 +155,13 @@ const LLM_BUDGET = 240;
  * observable), while old entries fall off the front during long matches.
  */
 const THOUGHT_FEED_MAX = 24;
+/**
+ * How many raw model replies (decisions + meeting lines) the feed keeps.
+ * Separate from `THOUGHT_FEED_MAX` because a JSON blob is a different thing
+ * from a decision row — the two lists are both shown and neither should
+ * crowd the other out.
+ */
+const RAW_JSON_MAX = 18;
 
 export type Phase = "briefing" | "playing" | "meeting" | "ended";
 export type Winner = "crew" | "imposter" | null;
@@ -184,10 +191,26 @@ export interface Body {
   roomId: RoomId;
 }
 
+/** Where a decision or meeting line came from: the live model or the fallback. */
+export type ThoughtSource = "model" | "heuristic";
+
+/** One raw model reply in the feed's JSON log, exactly as the provider returned it. */
+export interface RawJsonEntry {
+  id: number;
+  /** Simulation time in seconds. */
+  t: number;
+  key: string;
+  name: string;
+  color: string;
+  text: string;
+}
+
 /**
  * One entry in the spectator thought feed: what an AI agent just decided to
  * do and, in its own words, why. Written by `recordDecision` — the single
- * choke point every intent (model or heuristic) passes through.
+ * choke point every intent (model or heuristic) passes through. Entries that
+ * came from a live model also carry the raw JSON reply it emitted, exactly as
+ * the provider returned it, before the engine validated or applied anything.
  */
 export interface ThoughtEntry {
   id: number;
@@ -200,6 +223,10 @@ export interface ThoughtEntry {
   action: string;
   /** The agent's own reasoning, or null when it did not offer one. */
   reasoning: string | null;
+  /** Which path produced this decision. */
+  source: ThoughtSource;
+  /** The model's raw JSON reply, when this decision came from a live model. */
+  json: string | null;
 }
 
 export type EntityKind = "player" | "crew" | "imposter";
@@ -330,6 +357,8 @@ export interface Snapshot {
   spectator: boolean;
   /** The agent thought feed, oldest first. */
   thoughts: ThoughtEntry[];
+  /** The raw model replies behind the model-sourced decisions, oldest first. */
+  rawJsons: RawJsonEntry[];
 }
 
 export interface EngineOptions {
@@ -391,6 +420,24 @@ export class GameEngine {
   /** Agent thought feed (ring buffer, oldest first) for the UI. */
   thoughts: ThoughtEntry[] = [];
   private nextThoughtId = 1;
+  /** Raw model replies (oldest first) for the feed's JSON log. */
+  rawJsons: RawJsonEntry[] = [];
+  private nextRawId = 1;
+  /** Raw reply of an agent's most recent model decision, consumed by its UI row. */
+  private lastRawByKey: Map<string, string> = new Map();
+
+  /** Ring-buffer a raw model reply for the feed, tagged with its speaker. */
+  private pushRawJson(a: Actor, raw: string): void {
+    this.rawJsons.push({
+      id: this.nextRawId++,
+      t: this.time,
+      key: a.key,
+      name: a.name,
+      color: a.color,
+      text: raw.length > 400 ? `${raw.slice(0, 400)}…` : raw,
+    });
+    if (this.rawJsons.length > RAW_JSON_MAX) this.rawJsons.shift();
+  }
   llmEnabled: boolean;
   /** Set by the UI so the match can be written to history when it ends. */
   onMatchEnd: ((winner: "crew" | "imposter") => void) | null = null;
@@ -591,7 +638,17 @@ export class GameEngine {
 
   /** Per-agent decision context: its own endpoint, the shared gate and budget. */
   private contextFor(a: Actor): AiContext {
-    return { cfg: a.cfg, gate: this.ai.gate, budget: this.ai.budget };
+    return {
+      cfg: a.cfg,
+      gate: this.ai.gate,
+      budget: this.ai.budget,
+      // Each in-flight call gets its own context, so stashing the raw reply
+      // under the actor's key cannot cross wires between concurrent calls.
+      onRaw: (raw) => {
+        this.lastRawByKey.set(a.key, raw);
+        this.pushRawJson(a, raw);
+      },
+    };
   }
 
   // -- lookup helpers ------------------------------------------------------
@@ -1315,6 +1372,10 @@ export class GameEngine {
     }
 
     const view = this.buildView(a);
+    // Any raw reply stashed from a previous attempt must not bleed into this
+    // decision's feed row: only a reply that arrives for *this* attempt (via
+    // `contextFor(a).onRaw`) may be attached to it.
+    this.lastRawByKey.delete(a.key);
     // A live hazard collapses everyone's decision lull: with the Skeld's long
     // cross-map runs, a 10-16s cadence means the crew arrives at the repair
     // panel with no time left to actually choose FIX.
@@ -1324,9 +1385,7 @@ export class GameEngine {
         : a.role === "imposter"
           ? this.rng.range(7, 11)
           : this.rng.range(10, 16);
-    a.nextDecisionAt = this.time + nextIn;
-
-    if (this.llmEnabled && a.cfg) {
+    a.nextDecisionAt = this.time + nextIn;    if (this.llmEnabled && a.cfg) {
       const seq = ++a.decisionSeq;
       a.pendingDecision = true;
       void intentWithModel(this.contextFor(a), view)
@@ -1335,11 +1394,13 @@ export class GameEngine {
           if (intent) {
             this.llmCalls++;
             if (this.phase === "playing" && a.alive && seq === a.decisionSeq) {
-              this.applyIntent(a, intent);
+              this.applyIntent(a, intent, "model");
             }
           } else {
             this.llmFallbacks++;
-            if (this.phase === "playing" && a.alive) this.applyIntent(a, heuristicIntent(view, () => this.rng.next()));
+            if (this.phase === "playing" && a.alive) {
+              this.applyIntent(a, heuristicIntent(view, () => this.rng.next()), "heuristic");
+            }
           }
         })
         .catch(() => {
@@ -1349,7 +1410,7 @@ export class GameEngine {
       return;
     }
 
-    this.applyIntent(a, heuristicIntent(view, () => this.rng.next()));
+    this.applyIntent(a, heuristicIntent(view, () => this.rng.next()), "heuristic");
   }
 
   /**
@@ -1358,7 +1419,7 @@ export class GameEngine {
    * the sprite to it; `INTERACT` is refused or executed by the engine referee;
    * `VENT` and `SABOTAGE` are the traitor's engine-owned abilities.
    */
-  private applyIntent(a: Actor, intent: Intent): void {
+  private applyIntent(a: Actor, intent: Intent, source: ThoughtSource = "heuristic"): void {
     if (intent.action === "INTERACT") {
       const verb =
         intent.interaction_type === "TASK"
@@ -1371,7 +1432,7 @@ export class GameEngine {
                 ? "Report a body"
                 : "Call an emergency meeting";
       const here = this.zones.zones[a.zoneId]?.name ?? a.zoneId;
-      this.recordDecision(a, `${verb} in ${here}`, `${verb} (${intent.target})`, intent.reasoning);
+      this.recordDecision(a, `${verb} in ${here}`, `${verb} (${intent.target})`, intent.reasoning, source);
       const failure = this.executeInteraction(a, intent);
       // A failed action never happens; instead the reason is attached to the
       // agent and delivered as `system_message` on its next decision.
@@ -1381,7 +1442,7 @@ export class GameEngine {
 
     if (intent.action === "SABOTAGE") {
       if (a.role === "imposter") {
-        this.recordDecision(a, "Sabotage the station to split the crew", "Triggered a sabotage", intent.reasoning);
+        this.recordDecision(a, "Sabotage the station to split the crew", "Triggered a sabotage", intent.reasoning, source);
         this.triggerSabotage();
       }
       return;
@@ -1397,7 +1458,7 @@ export class GameEngine {
           : null;
       const vent = requested ?? nearestPoi(this.map, "vent", imp.x, imp.y)?.id ?? null;
       if (vent) {
-        this.recordDecision(a, "Slip into a vent to travel unseen", "Headed for a vent", intent.reasoning);
+        this.recordDecision(a, "Slip into a vent to travel unseen", "Headed for a vent", intent.reasoning, source);
         imposterSeekVent(imp, this.map, this.grid, vent);
       }
       return;
@@ -1424,6 +1485,7 @@ export class GameEngine {
             `Repair the ${this.sabotage.kind} in ${zone.name}`,
             `Moving to ${zone.name} to repair the sabotage`,
             intent.reasoning,
+            source,
           );
           crewmateGotoPoi(c, this.map, this.grid, fix.id);
           return;
@@ -1441,11 +1503,12 @@ export class GameEngine {
           `Work "${label}" in ${zone.name}`,
           `Moving to ${zone.name} for "${label}"`,
           intent.reasoning,
+          source,
         );
         crewmateGotoPoi(c, this.map, this.grid, owed);
         return;
       }
-      this.recordDecision(a, `Move to ${zone.name}`, `Moving to ${zone.name}`, intent.reasoning);
+      this.recordDecision(a, `Move to ${zone.name}`, `Moving to ${zone.name}`, intent.reasoning, source);
       const pt = standPoint(this.map, zone);
       crewmateGotoPoint(c, this.grid, pt.x, pt.y);
       return;
@@ -1464,6 +1527,7 @@ export class GameEngine {
         `Stalk ${prey.name} in ${zone.name}`,
         `Stalking ${prey.name}`,
         intent.reasoning,
+        source,
       );
       imposterStalk(imp, this.grid, this.crewmates, (prey.entity as Crewmate).id);
       return;
@@ -1476,6 +1540,7 @@ export class GameEngine {
         `Close on the player in ${zone.name}`,
         "Chasing the player",
         intent.reasoning,
+        source,
       );
       imposterGotoPoint(imp, this.grid, human.entity.x, human.entity.y);
       return;
@@ -1490,11 +1555,12 @@ export class GameEngine {
         `Fake work at "${label}" in ${zone.name} (alibi)`,
         `Heading to fake a task in ${zone.name}`,
         intent.reasoning,
+        source,
       );
       imposterFakeTask(imp, this.map, this.grid, zone.taskPoiIds[0]);
       return;
     }
-    this.recordDecision(a, `Move to ${zone.name}`, `Moving to ${zone.name}`, intent.reasoning);
+    this.recordDecision(a, `Move to ${zone.name}`, `Moving to ${zone.name}`, intent.reasoning, source);
     const pt = standPoint(this.map, zone);
     imposterGotoPoint(imp, this.grid, pt.x, pt.y);
   }
@@ -1509,10 +1575,13 @@ export class GameEngine {
     goal: string,
     action: string,
     reasoning?: string,
+    source: ThoughtSource = "heuristic",
+    json?: string | null,
   ): void {
     setGoal(a.mind, goal, this.time, reasoning ?? null, action);
     // Feed the spectator thought log. Every intent passes through here, so
-    // heuristic fallbacks and model decisions both show up.
+    // heuristic fallbacks and model decisions both show up. When the intent
+    // came from a live model the raw JSON reply is attached to the row.
     this.thoughts.push({
       id: this.nextThoughtId++,
       t: this.time,
@@ -1521,6 +1590,10 @@ export class GameEngine {
       color: a.color,
       action,
       reasoning: reasoning ?? null,
+      source,
+      // Only a model-sourced decision shows a JSON blob; a heuristic fallback
+      // that fired after an invalid model reply must not borrow its output.
+      json: source === "model" ? (json ?? this.lastRawByKey.get(a.key) ?? null) : null,
     });
     if (this.thoughts.length > THOUGHT_FEED_MAX) this.thoughts.shift();
   }
@@ -1829,6 +1902,9 @@ export class GameEngine {
   }
 
   private speak(a: Actor, m: MeetingState): void {
+    // Same freshness rule as `decide`: a statement may only show the raw JSON
+    // that arrives for its own model call.
+    this.lastRawByKey.delete(a.key);
     const input = {
       others: this.living().map((x) => x.key),
       playerLine: m.playerLine,
@@ -1841,11 +1917,25 @@ export class GameEngine {
       ejectedSoFar: [] as string[],
     };
 
-    const post = (stmt: Statement): void => {
+    const post = (stmt: Statement, source: ThoughtSource, json?: string | null): void => {
       // Late model replies must not leak into voting or the next meeting.
       if (this.meeting !== m || m.stage !== "discussion") return;
       this.say(a, stmt.line);
       if (stmt.accuse) this.applyAccusation(a, stmt.accuse, m);
+      // Meeting lines belong in the feed too: what the agent said and, for
+      // model statements, the raw JSON reply the line was parsed out of.
+      this.thoughts.push({
+        id: this.nextThoughtId++,
+        t: this.time,
+        key: a.key,
+        name: a.name,
+        color: a.color,
+        action: `Said: ${stmt.line.slice(0, 96)}${stmt.line.length > 96 ? "..." : ""}`,
+        reasoning: stmt.accuse ? `Accusing ${this.names[stmt.accuse] ?? stmt.accuse}` : null,
+        source,
+        json: source === "model" ? (json ?? this.lastRawByKey.get(a.key) ?? null) : null,
+      });
+      if (this.thoughts.length > THOUGHT_FEED_MAX) this.thoughts.shift();
     };
 
     if (this.llmEnabled && a.cfg) {
@@ -1853,20 +1943,20 @@ export class GameEngine {
         .then((stmt) => {
           if (stmt) {
             this.llmCalls++;
-            post(stmt);
+            post(stmt, "model");
           } else {
             this.llmFallbacks++;
-            post(fallbackStatement(this.map, a.mind, { key: a.key, name: a.name }, this.names, input));
+            post(fallbackStatement(this.map, a.mind, { key: a.key, name: a.name }, this.names, input), "heuristic");
           }
         })
         .catch(() => {
           this.llmFallbacks++;
-          post(fallbackStatement(this.map, a.mind, { key: a.key, name: a.name }, this.names, input));
+          post(fallbackStatement(this.map, a.mind, { key: a.key, name: a.name }, this.names, input), "heuristic");
         });
       return;
     }
 
-    post(heuristicStatement(this.map, a.mind, { key: a.key, name: a.name }, this.names, input));
+    post(heuristicStatement(this.map, a.mind, { key: a.key, name: a.name }, this.names, input), "heuristic");
   }
 
   /** Listeners adjust their beliefs when someone accuses someone else. */
@@ -2395,6 +2485,7 @@ export class GameEngine {
       ejects: this.ejects,
       spectator: this.spectator,
       thoughts: [...this.thoughts],
+      rawJsons: [...this.rawJsons],
       analyst: this.analystView
         ? this.actors
             .filter((a) => a.alive)

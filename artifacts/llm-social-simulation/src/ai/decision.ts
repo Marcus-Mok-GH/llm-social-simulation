@@ -433,6 +433,12 @@ export interface AiContext {
   gate: { acquire: () => Promise<() => void> };
   /** Requests left this match; prevents runaway spend. */
   budget: { remaining: number };
+  /**
+   * Observes the model's raw reply exactly as it came back, before any
+   * validation. The thought feed uses it to show what the model actually
+   * said — including replies the validator went on to refuse.
+   */
+  onRaw?: (raw: string) => void;
 }
 
 export async function intentWithModel(ctx: AiContext, view: WorldView): Promise<Intent | null> {
@@ -455,6 +461,7 @@ export async function intentWithModel(ctx: AiContext, view: WorldView): Promise<
       maxTokens: 220,
     });
     if (!text) return null;
+    ctx.onRaw?.(text);
     return validateIntent(extractJson<unknown>(text), view);
   } finally {
     release();
@@ -565,6 +572,7 @@ export async function statementWithModel(
       { json: true, temperature: 0.85, maxTokens: 320 },
     );
     if (!text) return null;
+    ctx.onRaw?.(text);
 
     const parsed = extractJson<{ line?: unknown; accuse?: unknown }>(text);
     if (!parsed || typeof parsed.line !== "string" || parsed.line.trim().length === 0) return null;

@@ -365,6 +365,7 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
       <ThoughtFeed
         className="mt-3"
         thoughts={snap.thoughts}
+        rawJsons={snap.rawJsons}
         spectator={snap.spectator}
         compact={isMobile}
       />

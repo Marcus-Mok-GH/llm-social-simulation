@@ -135,6 +135,11 @@ console.log("thought feed");
     feed.every((t, i) => i === 0 || feed[i - 1].id < t.id),
     "ids stay strictly increasing across eviction",
   );
+  check(
+    feed.every((t) => (t.source === "model" || t.source === "heuristic") && t.json === null),
+    "scripted runs tag every entry heuristic with no model JSON",
+  );
+  check(engine.snapshot().rawJsons.length === 0, "scripted runs log no raw model replies");
 }
 
 // ---------------------------------------------------------------------------
