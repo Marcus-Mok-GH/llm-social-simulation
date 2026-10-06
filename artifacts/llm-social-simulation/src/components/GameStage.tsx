@@ -2,13 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { UMBRA_DECK_MAP } from "@/game/map";
 import { isMovementKey } from "@/game/input";
 import { GameEngine, type Snapshot } from "@/game/engine";
+import { foldMatch, loadLegacy, saveLegacy } from "@/game/legacy";
 import { rankSuspects } from "@/game/perception";
 import { saveMatch, type MatchRecord } from "@/game/persistence";
 import { drawMap } from "@/game/render/renderMap";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { Confessional } from "./Confessional";
 import { GameHud, TaskRail } from "./GameHud";
 import { Briefing, EndScreen, type RosterRow } from "./GameOverlays";
 import { MeetingOverlay } from "./MeetingOverlay";
+import { StationLog } from "./StationLog";
 import { TaskModal } from "./TaskModal";
 import { ThoughtFeed } from "./ThoughtFeed";
 import { TouchControls } from "./TouchControls";
@@ -48,6 +51,19 @@ function buildRecord(engine: GameEngine, winner: "crew" | "imposter"): MatchReco
     tasksTotal: engine.taskTotal,
     llm: { calls: engine.llmCalls, fallbacks: engine.llmFallbacks },
     transcript: engine.messages.map((m) => ({ t: m.t, who: m.speakerName, text: m.text })),
+    stationLog: engine.stationLog.map((e) => ({
+      t: e.t,
+      name: e.name,
+      text: e.text,
+      source: e.source,
+    })),
+    confessional: engine.confessional.map((c) => ({
+      t: c.t,
+      name: c.name,
+      role: c.role,
+      action: c.action,
+      thought: c.thought,
+    })),
     beliefs: engine.actors.map((a) => ({
       key: a.key,
       name: a.name,
@@ -72,6 +88,8 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
   const [engine, setEngine] = useState(() => new GameEngine());
   const [snap, setSnap] = useState<Snapshot>(() => engine.snapshot());
   const [analyst, setAnalyst] = useState(false);
+  /** Manual override for the confessional gate; see `Confessional`. */
+  const [confessionalOpen, setConfessionalOpen] = useState(false);
   const isMobile = useIsMobile();
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -91,6 +109,12 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
   );
 
   const sync = useCallback(() => setSnap(engine.snapshot()), [engine]);
+
+  // The confessional is a spoiler by construction — a traitor is candid in it
+  // and the crew never hears it. So it is only legible once you are no longer
+  // one of the players: while spectating, after the verdict, or if you ask.
+  const confessionalReveal =
+    snap.spectator || snap.phase === "ended" || confessionalOpen;
 
   // --- render + simulation loop ------------------------------------------
   useEffect(() => {
@@ -169,6 +193,11 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
     engine.onMatchEnd = (winner) => {
       const record = buildRecord(engine, winner);
       onHistoryChange?.(saveMatch(record));
+      // Carry this shift into the ledger the next one reads: wins, eliminations
+      // and — the interesting part — the grudges an innocent takes away from
+      // everyone who voted them out.
+      const summary = engine.legacySummary();
+      if (summary) saveLegacy(foldMatch(loadLegacy(), summary));
     };
 
     let raf = 0;
@@ -269,10 +298,13 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
   }, [engine]);
 
   const restart = (asImposter: boolean) => {
+    // A fresh engine re-reads the ledger, so the grudges this match just banked
+    // are already in the next roster's heads.
     const next = new GameEngine({ playerIsImposter: asImposter });
     setEngine(next);
     setSnap(next.snapshot());
     setAnalyst(false);
+    setConfessionalOpen(false);
   };
 
   return (
@@ -325,6 +357,7 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
           <Briefing
             role={snap.role}
             roster={roster}
+            legacy={snap.legacy}
             compact={isMobile}
             onStart={() => {
               engine.begin();
@@ -377,15 +410,26 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
         )}
       </div>
 
-      {/* The thought feed lives in normal flow below the deck (and below the
-          meeting/end overlays), so it never fights the HUD for map space. */}
-      <ThoughtFeed
-        className="mt-3"
-        thoughts={snap.thoughts}
-        rawJsons={snap.rawJsons}
-        spectator={snap.spectator}
-        compact={isMobile}
-      />
+      {/* The three read-out panels live in normal flow below the deck (and
+          below the meeting/end overlays), so they never fight the HUD for map
+          space. On desktop they sit side by side: the station log is what the
+          crew wrote, the confessional is what they were thinking, and the
+          thought feed is the raw decision log underneath both. */}
+      <div className="mt-3 grid gap-3 lg:grid-cols-3">
+        <StationLog entries={snap.stationLog} compact={isMobile} />
+        <Confessional
+          entries={snap.confessional}
+          reveal={confessionalReveal}
+          onReveal={() => setConfessionalOpen(true)}
+          compact={isMobile}
+        />
+        <ThoughtFeed
+          thoughts={snap.thoughts}
+          rawJsons={snap.rawJsons}
+          spectator={snap.spectator}
+          compact={isMobile}
+        />
+      </div>
     </div>
   );
 }

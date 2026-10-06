@@ -17,6 +17,7 @@ import {
   fallbackStatement,
   heuristicIntent,
   intentWithModel,
+  logEntryWithModel,
   statementWithModel,
   type AiContext,
   type Intent,
@@ -45,7 +46,12 @@ import {
   updateCrewmate,
   type Crewmate,
 } from "./crewmate";
-import { heuristicStatement, type NameIndex, type Statement } from "./dialogue";
+import {
+  confessionalFallback,
+  heuristicStatement,
+  type NameIndex,
+  type Statement,
+} from "./dialogue";
 import {
   createImposters,
   imposterGotoPoint,
@@ -63,6 +69,20 @@ import {
   type PointOfInterest,
   type RoomId,
 } from "./map";
+import {
+  LOG_ENTRY_MAX,
+  LOG_MODEL_CALLS_MAX,
+  logBriefFor,
+  templateLogEntry,
+  type StationLogEntry,
+} from "./creative";
+import {
+  loadLegacy,
+  seedGrudges,
+  type LegacyEjection,
+  type LegacyLedger,
+  type LegacyMatchSummary,
+} from "./legacy";
 import { buildNavGrid, type NavGrid } from "./navigation";
 import {
   buildZoneGraph,
@@ -159,6 +179,40 @@ const THOUGHT_FEED_MAX = 24;
  * crowd the other out.
  */
 const RAW_JSON_MAX = 18;
+/**
+ * How many confessional rows the panel keeps. Larger than the thought feed: a
+ * confessional is short and the audience wants the arc, not just the last line.
+ */
+const CONFESSIONAL_MAX = 36;
+
+/**
+ * One row of the per-agent confessional: what an agent was *really* thinking
+ * when it did or said the thing above it. This is the audience's channel — the
+ * rest of the crew never sees it, which is what makes watching a lie land so
+ * much better than watching a log of it.
+ */
+export interface ConfessionalEntry {
+  id: number;
+  /** Simulation time in seconds. */
+  t: number;
+  key: string;
+  name: string;
+  color: string;
+  /** The agent's role — the panel it is talking to is trusted, not public. */
+  role: "crew" | "imposter";
+  /** What the audience just watched it do or hear it say. */
+  action: string;
+  /** The private thought itself. */
+  thought: string;
+  /** Where the thought came from. */
+  source: ThoughtSource;
+  /**
+   * True when the public `action` and the private `thought` disagree — an
+   * impostor covering, which is exactly the moment worth watching. Computed on
+   * role, not by diffing text: a traitor's confessional is always a cover story.
+   */
+  concealing: boolean;
+}
 
 export type Phase = "briefing" | "playing" | "meeting" | "ended";
 export type Winner = "crew" | "imposter" | null;
@@ -356,6 +410,12 @@ export interface Snapshot {
   thoughts: ThoughtEntry[];
   /** The raw model replies behind the model-sourced decisions, oldest first. */
   rawJsons: RawJsonEntry[];
+  /** The public station log the AI crew has written this match, oldest first. */
+  stationLog: StationLogEntry[];
+  /** Per-agent private thoughts, oldest first. Spoilers: see `Confessional`. */
+  confessional: ConfessionalEntry[];
+  /** Cross-match reputations and grudges, or null when the ledger is off. */
+  legacy: LegacyView | null;
 }
 
 export interface EngineOptions {
@@ -363,6 +423,21 @@ export interface EngineOptions {
   seed?: number;
   playerIsImposter?: boolean;
   llm?: boolean;
+  /** Skip the cross-match ledger (tests, replays, deterministic replays). */
+  legacy?: boolean;
+}
+
+/** What the UI needs to show who has history with whom. */
+export interface LegacyView {
+  shifts: number;
+  agents: {
+    name: string;
+    games: number;
+    wins: number;
+    eliminations: number;
+    /** Names this agent opens the shift already distrusting. */
+    grudges: string[];
+  }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -423,6 +498,24 @@ export class GameEngine {
   /** Raw reply of an agent's most recent model decision, consumed by its UI row. */
   private lastRawByKey: Map<string, string> = new Map();
 
+  /** The public station log: what the AI crew has written at generative consoles. */
+  stationLog: StationLogEntry[] = [];
+  private nextLogId = 1;
+  /** Log entries produced by a live model, so the extra calls stay capped. */
+  private logModelCalls = 0;
+  /** Consoles that have already produced a log entry this match. */
+  private loggedConsoles = new Set<string>();
+  /** Per-agent private thoughts (the confessional), oldest first. */
+  confessional: ConfessionalEntry[] = [];
+  private nextConfessionalId = 1;
+
+  /** Cross-match ledger, and the grudges each agent opened this shift with. */
+  private legacy: LegacyLedger | null = null;
+  private legacyEnabled: boolean;
+  private grudgesByKey: Map<string, string[]> = new Map();
+  /** Every ejection this match with its voters, for the end-of-match fold. */
+  private ejections: LegacyEjection[] = [];
+
   /** Ring-buffer a raw model reply for the feed, tagged with its speaker. */
   private pushRawJson(a: Actor, raw: string): void {
     this.rawJsons.push({
@@ -467,6 +560,11 @@ export class GameEngine {
     this.llmEnabled = opts.llm ?? true;
     this.provider = activeProvider();
     this.ai = { cfg: null, gate: new RequestGate(300, 3), budget: { remaining: LLM_BUDGET } };
+    // The cross-match ledger is read once, here, so the roster can open the
+    // shift already carrying last shift's grudges. Headless runs (no storage)
+    // simply get an empty ledger and the seeding becomes a no-op.
+    this.legacyEnabled = opts.legacy ?? true;
+    this.legacy = this.legacyEnabled ? loadLegacy() : null;
 
     this.buildRoster(opts.playerIsImposter ?? false);
   }
@@ -561,6 +659,21 @@ export class GameEngine {
     const allies = this.actors.filter((a) => a.role === "imposter").map((a) => a.key);
     for (const a of this.actors) {
       if (a.role === "imposter") a.mind.allies = allies.filter((k) => k !== a.key);
+    }
+
+    // --- cross-match memory ---------------------------------------------
+    // Each AI walks in already distrusting whoever wronged it last shift. This
+    // runs after allies are set (a traitor never distrusts its partner) and
+    // before any perception, so a grudge is something the agent *brought* to
+    // the deck rather than something the match told it.
+    this.grudgesByKey.clear();
+    if (this.legacy) {
+      const roster = this.actors.map((a) => ({ key: a.key, name: a.name }));
+      for (const a of this.actors) {
+        if (a.isPlayer) continue;
+        const grudges = seedGrudges(a.mind, a.name, this.legacy, roster);
+        if (grudges.length > 0) this.grudgesByKey.set(a.key, grudges);
+      }
     }
 
     if (playerRole === "crew") {
@@ -1379,6 +1492,10 @@ export class GameEngine {
       // Sight, not omniscience: only a body this agent can currently see counts.
       bodyOutstanding: this.bodies.some((b) => this.visible(a, b.x, b.y)),
       taskProgress: taskBarFraction({ total: this.taskTotal, complete: this.taskComplete }),
+      // Cross-match context: the shift count and the names this agent walked in
+      // already watching. A hunch it brought, never evidence from this round.
+      shifts_played: this.legacy?.shifts ?? 0,
+      your_grudges: this.grudgesByKey.get(a.key) ?? [],
     };
   }
 
@@ -1674,6 +1791,132 @@ export class GameEngine {
       json: source === "model" ? (json ?? this.lastRawByKey.get(a.key) ?? null) : null,
     });
     if (this.thoughts.length > THOUGHT_FEED_MAX) this.thoughts.shift();
+
+    // The same decision, restated on the audience channel. An agent with no
+    // reasoning of its own still gets a candid line, so the confessional is
+    // never empty just because the match is running on heuristics alone.
+    this.confess(
+      a,
+      action,
+      reasoning?.trim() || confessionalFallback(a.mind, this.names),
+      source,
+    );
+  }
+
+  /**
+   * Record what an agent was *really* thinking.
+   *
+   * Nothing written here is ever serialized into another agent's prompt, so the
+   * confessional can be candid while the meeting a few feet away stays a lie.
+   * That asymmetry is the point: the crew hears the public line, the audience
+   * hears the actual one just underneath it.
+   */
+  private confess(a: Actor, action: string, thought: string, source: ThoughtSource): void {
+    this.confessional.push({
+      id: this.nextConfessionalId++,
+      t: this.time,
+      key: a.key,
+      name: a.name,
+      color: a.color,
+      role: a.role,
+      action,
+      thought,
+      source,
+      // A traitor is covering whenever it opens its mouth; that is not inferred
+      // from the text, it is what the role means.
+      concealing: a.role === "imposter",
+    });
+    if (this.confessional.length > CONFESSIONAL_MAX) this.confessional.shift();
+  }
+
+  /**
+   * Produce one public station-log entry for a generative console.
+   *
+   * The log is the deck's shared text: an AI writes the readout, the intercept
+   * summary or the cargo note, and *every* agent can read it back in a meeting.
+   * An impostor writes one too — a cover story — which is the whole reason the
+   * log is interesting rather than decorative.
+   *
+   * Cost control, in order of importance:
+   *   - one entry per console per match, so a patrol loop can never spam it;
+   *   - at most `LOG_MODEL_CALLS_MAX` live model calls, after which the console's
+   *     deterministic template fills in;
+   *   - the template path is synchronous and hash-seeded, never touching the
+   *     engine RNG, so headless replays stay byte-identical.
+   */
+  private writeLogEntry(a: Actor, poi: PointOfInterest, faked: boolean): void {
+    if (!a.alive || this.stationLog.length >= LOG_ENTRY_MAX) return;
+    if (this.loggedConsoles.has(poi.id)) return;
+    const brief = logBriefFor(poi.id);
+    if (!brief) return;
+    // Claim the console up front: two agents can finish in the same tick, and
+    // the second must not queue a duplicate entry behind the first's await.
+    this.loggedConsoles.add(poi.id);
+
+    const t = this.time;
+    const room = roomAt(this.map, poi.x, poi.y).name;
+    const useModel =
+      this.llmEnabled &&
+      a.cfg !== null &&
+      this.ai.budget.remaining > 0 &&
+      this.logModelCalls < LOG_MODEL_CALLS_MAX;
+
+    const publish = (text: string, source: StationLogEntry["source"]): void => {
+      const entry: StationLogEntry = {
+        id: this.nextLogId++,
+        t,
+        key: a.key,
+        name: a.name,
+        color: a.color,
+        poiId: poi.id,
+        label: poi.label,
+        room,
+        text,
+        source,
+        faked,
+      };
+      this.stationLog.push(entry);
+      if (this.stationLog.length > LOG_ENTRY_MAX) this.stationLog.shift();
+
+      // The log is public by construction: everyone alive banks the same line,
+      // as neutral context (weight 0), so it can be quoted in a meeting without
+      // ever counting as evidence against the author.
+      const line = `Station log: ${a.name} filed "${text}" at ${poi.label} in ${room}${
+        faked ? " (claimed)" : ""
+      }.`;
+      for (const other of this.actors) {
+        if (!other.alive) continue;
+        remember(other.mind, { t, kind: "log", actorKey: a.key, roomId: poi.roomId, text: line });
+      }
+    };
+
+    if (!useModel) {
+      publish(templateLogEntry(brief, a.name, `${poi.id}:${this.stationLog.length}`), "template");
+      return;
+    }
+
+    this.logModelCalls++;
+    void logEntryWithModel(this.contextFor(a), {
+      authorName: a.name,
+      brief,
+      label: poi.label,
+      room,
+      faked,
+      traitor: a.role === "imposter",
+    })
+      .then((text) => {
+        if (text) {
+          this.llmCalls++;
+          publish(text, "model");
+        } else {
+          this.llmFallbacks++;
+          publish(templateLogEntry(brief, a.name, `${poi.id}:${this.stationLog.length}`), "template");
+        }
+      })
+      .catch(() => {
+        this.llmFallbacks++;
+        publish(templateLogEntry(brief, a.name, `${poi.id}:${this.stationLog.length}`), "template");
+      });
   }
 
   // -- interaction validation ----------------------------------------------
@@ -2012,6 +2255,16 @@ export class GameEngine {
         json: source === "model" ? (json ?? this.lastRawByKey.get(a.key) ?? null) : null,
       });
       if (this.thoughts.length > THOUGHT_FEED_MAX) this.thoughts.shift();
+
+      // The confessional: what it said, and what it was actually thinking while
+      // it said it. A live model gives both channels in one call; a scripted
+      // line gets a stand-in private thought so the panel never goes quiet.
+      this.confess(
+        a,
+        `Said: ${stmt.line.slice(0, 140)}${stmt.line.length > 140 ? "..." : ""}`,
+        stmt.thinking?.trim() || confessionalFallback(a.mind, this.names),
+        source,
+      );
     };
 
     if (this.llmEnabled && a.cfg) {
@@ -2129,6 +2382,16 @@ export class GameEngine {
     this.ejects++;
     m.ejected = ejected.key;
     m.ejectedRole = ejected.role;
+    // Bank the ejection with its voters. This is the raw material for next
+    // shift's grudges: an innocent who was voted out blames every name on this
+    // list, so the ledger can carry the grudge into a match it did not play in.
+    this.ejections.push({
+      name: ejected.name,
+      role: ejected.role,
+      voters: Object.entries(m.votes)
+        .filter(([, target]) => target === ejected.key)
+        .map(([key]) => this.names[key] ?? key),
+    });
     this.syncTaskBudget();
 
     for (const a of living) {
@@ -2428,11 +2691,32 @@ export class GameEngine {
       if (c.completedTasks <= a.processed) continue;
       a.processed = c.completedTasks;
       const poi = this.map.pointsOfInterest.find((p) => p.id === c.lastPoiId);
+      // A generative console pays out content the moment the work lands —
+      // before the quota decides whether it also counts toward the task bar.
+      if (poi?.kind === "task") this.writeLogEntry(a, poi, false);
       if (poi?.kind !== "task") continue;
       if (a.counted >= TASKS_PER_CREW) continue;
       a.counted++;
+      // Tick the console off the agent's own list as well as the shared bar.
+      // Without this the assignment never clears, `hasUrgentInteraction` keeps
+      // offering the same console and the crewmate re-works it forever instead
+      // of walking its list — which is what an assignment is for. It also makes
+      // the generative consoles reachable at all.
+      const owned = a.tasks.find((t) => t.poiId === poi.id);
+      if (owned) owned.done = true;
       this.taskComplete = Math.min(this.taskTotal, this.taskComplete + 1);
       if (this.taskComplete >= this.taskTotal) this.checkWin();
+    }
+
+    // Impostors bank a finished alibi the same way, and a console that no one
+    // has logged yet gives them a place to file a public cover story.
+    for (const a of this.actors) {
+      if (a.kind !== "imposter" || !a.alive) continue;
+      const imp = a.entity as Imposter;
+      if (imp.fakedTasks <= a.processed) continue;
+      a.processed = imp.fakedTasks;
+      const poi = this.map.pointsOfInterest.find((p) => p.id === imp.lastFakedPoiId);
+      if (poi?.kind === "task") this.writeLogEntry(a, poi, true);
     }
 
     this.syncTaskBudget();
@@ -2560,6 +2844,9 @@ export class GameEngine {
       spectator: this.spectator,
       thoughts: [...this.thoughts],
       rawJsons: [...this.rawJsons],
+      stationLog: [...this.stationLog],
+      confessional: [...this.confessional],
+      legacy: this.legacyView(),
       analyst: this.analystView
         ? this.actors
             .filter((a) => a.alive)
@@ -2582,6 +2869,46 @@ export class GameEngine {
             kind: minigameKind(this.activeTask.poiId),
           }
         : null,
+    };
+  }
+
+  // -- cross-match memory --------------------------------------------------
+
+  /**
+   * The ledger's view of this shift, for the end screen and the briefing: who
+   * has played before, and who they still hold a grudge against.
+   */
+  legacyView(): LegacyView | null {
+    if (!this.legacy || this.legacy.shifts === 0) return null;
+    return {
+      shifts: this.legacy.shifts,
+      agents: this.actors
+        .filter((a) => !a.isPlayer)
+        .map((a) => {
+          const record = this.legacy?.agents[a.name];
+          return {
+            name: a.name,
+            games: record?.games ?? 0,
+            wins: record?.wins ?? 0,
+            eliminations: record?.eliminations ?? 0,
+            grudges: Object.entries(record?.grudges ?? {})
+              .sort((x, y) => y[1] - x[1])
+              .map(([name]) => name),
+          };
+        }),
+    };
+  }
+
+  /**
+   * Everything the next shift's ledger needs from this one. The winning side is
+   * read from `winner`, which is set before `onMatchEnd` fires.
+   */
+  legacySummary(): LegacyMatchSummary | null {
+    if (!this.winner) return null;
+    return {
+      winner: this.winner,
+      roster: this.actors.map((a) => ({ name: a.name, role: a.role })),
+      ejections: [...this.ejections],
     };
   }
 

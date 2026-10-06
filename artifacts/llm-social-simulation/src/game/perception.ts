@@ -34,7 +34,9 @@ export type MemoryKind =
   | "task"
   | "flag"
   | "report"
-  | "eject";
+  | "eject"
+  /** A public station-log entry: flavour to reason about, never evidence. */
+  | "log";
 
 export interface MemoryEntry {
   /** Simulation time in seconds. */
@@ -142,7 +144,16 @@ const KIND_WEIGHT: Record<MemoryKind, number> = {
   task: 0,
   report: 0,
   eject: 0,
+  log: 0,
 };
+
+/**
+ * Hard ceiling on the opening bias a past match may inject. Deliberately below
+ * `topSuspect`'s 0.15 floor, so a grudge colours who an agent watches and how it
+ * breaks a tie without ever letting last shift's drama outvote this shift's
+ * evidence.
+ */
+export const MAX_GRUDGE = 0.12;
 
 const BASELINE = 0.05;
 
@@ -226,6 +237,22 @@ function bump(mind: Mind, target: string, delta: number): void {
   if (mind.allies.includes(target)) return;
   const current = mind.suspicion[target] ?? BASELINE;
   mind.suspicion[target] = Math.max(0, Math.min(1, current + delta));
+}
+
+/**
+ * Open a match already distrusting someone, from a grudge carried over from a
+ * previous shift (see `game/legacy.ts`). Capped at `MAX_GRUDGE` so cross-match
+ * memory is a bias, never a verdict; `decay` thins it out as the round goes on.
+ */
+export function seedDistrust(mind: Mind, target: string, weight: number): boolean {
+  if (target === mind.key || mind.allies.includes(target)) return false;
+  const bias = Math.max(0, Math.min(MAX_GRUDGE, weight));
+  if (bias <= 0) return false;
+  const current = mind.suspicion[target] ?? BASELINE;
+  const next = Math.max(current, Math.min(1, BASELINE + bias));
+  if (next === current) return false;
+  mind.suspicion[target] = next;
+  return true;
 }
 
 export function noteSighting(mind: Mind, target: string, roomId: RoomId, x: number, y: number, t: number): void {

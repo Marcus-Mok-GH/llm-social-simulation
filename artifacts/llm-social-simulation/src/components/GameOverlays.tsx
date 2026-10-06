@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
-import { Ghost, Rocket, Skull, Trophy } from "lucide-react";
-import type { Snapshot } from "@/game/engine";
+import { Ghost, History, Rocket, Skull, Trophy } from "lucide-react";
+import type { LegacyView, Snapshot } from "@/game/engine";
 import { describeMatch, type MatchRecord } from "@/game/persistence";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +16,8 @@ export interface RosterRow {
 interface BriefingProps {
   role: "crew" | "imposter";
   roster: RosterRow[];
+  /** Cross-match grudges carried in from previous shifts, if any. */
+  legacy?: LegacyView | null;
   /** Show touch control hints instead of the keyboard legend. */
   compact?: boolean;
   onStart: () => void;
@@ -24,8 +26,18 @@ interface BriefingProps {
 }
 
 /** Pre-match role reveal: who you are, who else is on the deck. */
-export function Briefing({ role, roster, compact = false, onStart, onSpectate }: BriefingProps) {
+export function Briefing({
+  role,
+  roster,
+  legacy = null,
+  compact = false,
+  onStart,
+  onSpectate,
+}: BriefingProps) {
   const imposter = role === "imposter";
+  // Only the agents that actually walked in carrying something are worth
+  // listing — the roster above already covers everyone else.
+  const grudges = (legacy?.agents ?? []).filter((a) => a.grudges.length > 0);
   return (
     <div className="absolute inset-0 z-30 flex items-start justify-center overflow-y-auto bg-void-950/92 px-3 py-4 sm:px-4 sm:py-6">
       <motion.div
@@ -68,6 +80,35 @@ export function Briefing({ role, roster, compact = false, onStart, onSpectate }:
             </li>
           ))}
         </ul>
+
+        {legacy && legacy.shifts > 0 && (
+          <div className="mt-5 rounded-lg border border-void-700 bg-void-950/60 p-3 text-left">
+            <p className="flex items-center gap-2 text-[10px] tracking-[0.2em] text-slate-500">
+              <History className="h-3 w-3" aria-hidden />
+              PRIOR SHIFTS · {legacy.shifts}
+            </p>
+            {grudges.length === 0 ? (
+              <p className="mt-1.5 text-[10px] leading-snug text-slate-600">
+                Nobody is holding a grudge yet. Vote out an innocent and that
+                changes.
+              </p>
+            ) : (
+              <ul className="mt-1.5 space-y-0.5">
+                {grudges.map((agent) => (
+                  <li key={agent.name} className="text-[10px] leading-snug text-slate-500">
+                    <span className="text-slate-300">{agent.name}</span> walked in
+                    distrusting{" "}
+                    <span className="text-[#ff8a9c]">{agent.grudges.join(", ")}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="mt-1.5 text-[9px] leading-snug text-slate-600">
+              An agent that gets voted out blames everyone who voted for it — and
+              opens the next shift already watching them.
+            </p>
+          </div>
+        )}
 
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
           <button

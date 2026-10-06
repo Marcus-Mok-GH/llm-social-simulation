@@ -28,6 +28,7 @@
 import { complete, extractJson, type ChatMessage, type LlmConfig } from "./llm";
 import { type Mind } from "../game/perception";
 import { heuristicStatement, memoryDigest, type NameIndex, type Statement } from "../game/dialogue";
+import { buildLogPrompt, parseLogEntry, type LogBrief } from "../game/creative";
 import type { GameMap, RoomId } from "../game/map";
 import { roomById } from "../game/map";
 
@@ -163,6 +164,14 @@ export interface WorldView {
   /** True only while the agent can currently see an unreported body. */
   bodyOutstanding: boolean;
   taskProgress: number;
+  /** --- carried over from previous shifts (see game/legacy.ts) --- */
+  /** How many shifts this crew has already survived together. */
+  shifts_played: number;
+  /**
+   * Names this agent walked in already distrusting because of a past match.
+   * An opening bias only — never evidence for this round.
+   */
+  your_grudges: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +229,9 @@ function systemPrompt(view: WorldView): string {
     "observed this match, your_decisions holds every decision you have made, and your_goal /",
     "last_action / last_reasoning carry the current thread. Stay consistent with your goal; if",
     "you change your mind, say so in reasoning and commit to the new goal.",
+    "You have played with this crew before: your_grudges lists anyone you walked in already",
+    "watching (they wronged you in a past shift). Treat it as a hunch, not proof, and never",
+    "cite a past match as evidence — this round has to be argued on this round's facts.",
     INTENT_SCHEMA,
   ];
 
@@ -271,6 +283,8 @@ function summarise(view: WorldView): Record<string, unknown> {
     vents: view.vents,
     interactables: view.interactables,
     system_message: view.system_message,
+    shifts_played: view.shifts_played,
+    your_grudges: view.your_grudges,
   };
 }
 
@@ -515,6 +529,11 @@ function statementSystem(mind: Mind): string {
     "This is a live group discussion: read the conversation so far, react to what others — including the human player — said, and answer the human directly if they addressed you.",
     "Never repeat a line that anyone has already said.",
     "Speak for yourself. Say what you saw, what you remember and what you believe — do not formally accuse or demand a vote; that is the room's call, not yours.",
+    // The two-channel reply is the confessional: `line` is heard by the crew,
+    // `thinking` is heard only by the audience.
+    'Also fill "thinking": your private read of the room, at most 15 words. It is NEVER spoken aloud and the other players never see it, so it may be candid — what you really believe, what you are hiding, and who you are steering toward.',
+    "Your thinking must match your true role and intention, not your public line.",
+    'Reply with ONLY JSON: {"line":"<one or two sentences>","thinking":"<at most 15 words, private>"}',
   ];
   if (mind.role === "imposter") {
     return [
@@ -522,14 +541,12 @@ function statementSystem(mind: Mind): string {
       "Stay calm, deflect, never reveal yourself, and steer suspicion toward an innocent crew member through what you say.",
       "Do not contradict facts you could not possibly know.",
       ...live,
-      'Reply with ONLY JSON: {"line":"<one or two sentences>"}',
     ].join("\n");
   }
   return [
     "You are an honest crew member in a social-deduction meeting aboard a space station.",
     "Report what you remember and share who you find suspicious. One or two sentences, spoken aloud.",
     ...live,
-    'Reply with ONLY JSON: {"line":"<one or two sentences>"}',
   ].join("\n");
 }
 
@@ -588,11 +605,60 @@ export async function statementWithModel(
     if (!text) return null;
     ctx.onRaw?.(text);
 
-    const parsed = extractJson<{ line?: unknown }>(text);
+    const parsed = extractJson<{ line?: unknown; thinking?: unknown }>(text);
     if (!parsed || typeof parsed.line !== "string" || parsed.line.trim().length === 0) return null;
 
     const line = parsed.line.trim().slice(0, 240);
-    return { line };
+    const thinking =
+      typeof parsed.thinking === "string" && parsed.thinking.trim().length > 0
+        ? parsed.thinking.trim().slice(0, 200)
+        : null;
+    return { line, thinking };
+  } finally {
+    release();
+  }
+}
+
+/**
+ * Write one station-log entry at a generative console (see `game/creative.ts`).
+ *
+ * This is the only *creative* model call in the game and it is deliberately the
+ * cheapest: one sentence, capped tokens, no reasoning effort, and the caller
+ * caps how many a match may make. A refusal, a timeout or a malformed reply
+ * returns null and the engine falls back to the console's template, so the log
+ * always fills and the match never stalls.
+ */
+export async function logEntryWithModel(
+  ctx: AiContext,
+  args: {
+    authorName: string;
+    brief: LogBrief;
+    label: string;
+    room: string;
+    faked: boolean;
+    traitor: boolean;
+  },
+): Promise<string | null> {
+  if (!ctx.cfg || ctx.budget.remaining <= 0) return null;
+
+  const { system, user } = buildLogPrompt({ ...args, brief: args.brief.brief });
+
+  const release = await ctx.gate.acquire();
+  try {
+    if (ctx.budget.remaining <= 0) return null;
+    ctx.budget.remaining--;
+
+    const text = await complete(
+      ctx.cfg,
+      [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      { json: true, temperature: 0.95, maxTokens: 200, reasoningEffort: "low" },
+    );
+    if (!text) return null;
+    ctx.onRaw?.(text);
+    return parseLogEntry(text);
   } finally {
     release();
   }

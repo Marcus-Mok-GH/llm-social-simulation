@@ -39,6 +39,19 @@ export interface MatchRecord {
   llm: { calls: number; fallbacks: number };
   transcript: TranscriptLine[];
   beliefs: BeliefSnapshot[];
+  /**
+   * The public station log the AI crew wrote at the generative consoles, and
+   * the private thoughts behind every decision and meeting line. Both are
+   * optional: matches recorded before the watchability pass do not have them.
+   */
+  stationLog?: { t: number; name: string; text: string; source: string }[];
+  confessional?: {
+    t: number;
+    name: string;
+    role: "crew" | "imposter";
+    action: string;
+    thought: string;
+  }[];
 }
 
 const STORAGE_KEY = "umbra.match-history.v1";

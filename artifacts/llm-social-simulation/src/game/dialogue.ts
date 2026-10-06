@@ -15,7 +15,14 @@ import { roomById, type GameMap, type RoomId } from "./map";
 export type NameIndex = Record<string, string>;
 
 export interface Statement {
+  /** What the agent said out loud, in the meeting. */
   line: string;
+  /**
+   * What the agent was actually thinking while it said that — the private
+   * confessional the audience gets to read. Only a live model produces one;
+   * the engine synthesises a stand-in for heuristic lines.
+   */
+  thinking?: string | null;
 }
 
 export interface Speaker {
@@ -48,6 +55,8 @@ export function memoryToLine(
       return `${who} triggered the sabotage. I'd look at them first.`;
     case "task":
       return `I saw ${who} working a console in ${where} — looked legit.`;
+    case "log":
+      return m.text;
     case "flag":
       return m.text;
     case "report":
@@ -131,6 +140,35 @@ export function heuristicStatement(
   ];
   const idx = Math.abs(mind.key.length * 7 + mind.memories.length + turn) % alibis.length;
   return { line: alibis[idx] };
+}
+
+/**
+ * A private thought for an agent that did not come from a model.
+ *
+ * The confessional panel must never be empty just because no key is configured:
+ * the whole point is that the audience can hear what an agent really thinks,
+ * and the scripted beliefs already know that. Impostors get a cover-story line,
+ * crew get their genuine read of the room.
+ */
+export function confessionalFallback(mind: Mind, names: NameIndex): string {
+  const top = rankSuspects(mind, 0.12)[0];
+  const who = top ? names[top.key] ?? top.key : null;
+
+  if (mind.role === "imposter") {
+    if (mind.allies.length > 0) {
+      const ally = names[mind.allies[0]] ?? mind.allies[0];
+      return who
+        ? `Keep it steady — let ${who} take the heat, and never cross ${ally}.`
+        : `Keep it steady. ${ally} and I just need one clean kill.`;
+    }
+    return who
+      ? `Say nothing useful. ${who} is the name the room wants to hear.`
+      : "Say nothing useful. Let the room fill the silence itself.";
+  }
+
+  if (who) return `No proof yet — but I keep coming back to ${who}.`;
+  if (mind.memories.length === 0) return "Haven't seen anything. I need eyes on the halls.";
+  return "Nothing adds up yet. I'll keep watching where people actually walk.";
 }
 
 /**

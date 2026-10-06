@@ -21,6 +21,9 @@ to trust, and **argue and vote** in meetings.
 | **Belief model** | Per-agent complete match log (every event, sighting, decision and meeting, from start to finish) + suspicion vector with decay, vent sightings, body-room inference |
 | **LLM decision loop** | A configurable OpenAI-compatible provider (Pollinations or Berget) returns validated JSON intents (`MOVE`/`INTERACT`/`VENT`/`SABOTAGE`) and meeting lines; each AI agent runs a **different** model from a cheap-model pool, with heuristic fallback on any failure |
 | **Persistence** | Finished matches, transcripts and every agent's suspicion snapshot saved to `localStorage` |
+| **Station log** | Ten consoles ask the crew to *write* a line (a scan readout, an intercept summary, a cargo note) instead of waiting out a timer. Entries are public — every agent can quote them in a meeting — and a traitor writes a cover story |
+| **Confessional** | Every decision and meeting line carries the agent's private thought, one channel underneath the public one. Sealed while you are playing (it spoils the match), legible while spectating or after the verdict |
+| **Cross-match ledger** | Wins, eliminations and grudges survive between shifts. An agent voted out blames every voter and opens the next match already watching them |
 | Analyst view | Optional overlay showing each agent's current top suspect |
 | **Deck artwork** | The official Skeld art (`public/skeld-map.webp`) is the deck itself: actors, task markers and fog render on top of it |
 
@@ -107,6 +110,21 @@ key is scoped to).
 With no key at all the game still plays end to end — every agent falls back to
 the scripted, belief-driven heuristic, and the HUD says so.
 
+### What the watchability layer costs
+
+The three systems that make a match worth *watching* rather than merely reading
+(see below) are built to stay inside that same budget:
+
+- a station-log entry is **text only** — one sentence, 200 max tokens, low
+  reasoning effort — and a match may spend at most `LOG_MODEL_CALLS_MAX` (4)
+  live calls on the whole log, after which the console's deterministic template
+  fills in;
+- the confessional adds **no calls at all**: it rides on the `reasoning` the
+  intent already returns and the `thinking` field the meeting call already
+  answers with, and is synthesised from the agent's own beliefs when running on
+  the heuristic;
+- the ledger is pure `localStorage` — no model is ever consulted about a grudge.
+
 > **Deployment note:** this is a client-only app, so the key is inlined into the
 > production bundle. Anyone who can load the page can read it. Put it behind a
 > small proxy if that matters for your deployment.
@@ -125,9 +143,36 @@ POLLINATIONS_API_KEY=... pnpm --filter @workspace/llm-social-simulation run veri
 - `scripts/simulate.ts` — replays complete matches headlessly and asserts that
   perception, memory, kills, meetings, ejections, the task bar and the win
   conditions all actually fired. Deterministic: same seed, same result.
-- `scripts/verify-llm.ts` — exercises the real network path: one movement intent,
-  one crew statement and one imposter deflection, each validated exactly as the
-  engine validates them.
+- `scripts/validate-watchability.ts` — the three watchability systems, mostly
+  offline: the log templates are deterministic, a traitor's confessional is
+  always a cover story, a grudge is capped below the threshold an agent acts on,
+  and the ledger round-trips through the engine (including the end-of-match fold
+  the UI performs).
+- `scripts/verify-llm.ts` — exercises the real network path: every model in the
+  pool in JSON mode, then two movement intents, two meeting statements (both of
+  which must come back with a private `thinking` line) and two station-log
+  entries, each validated exactly as the engine validates them.
+
+## Why it is worth watching
+
+A social-deduction match is only interesting if there is something to watch
+besides a transcript. Three systems carry that, and all three are survival
+instincts for the agents rather than decoration:
+
+1. **The agents write.** Ten consoles ask for a line instead of a wait, and the
+   resulting station log is *public* — every agent remembers it and can quote it
+   in a meeting. A crew readout is flavour; an impostor's cover story filed next
+to it is evidence, and the two sit in the same scroll box.
+2. **You can hear what they really think.** Each decision carries a private
+   thought, and each meeting line carries a `thinking` field the room never
+   hears. A crew note is usually just an honest read of the room; a traitor's is
+a cover story, and the panel labels which is which. The gap between the two
+channels is the show — so it stays sealed while you are one of the players.
+3. **They remember the last shift.** The ledger keeps wins, eliminations and
+   grudges between matches, and an innocent who gets voted out blames every name
+   on the ballot. Next match they open already watching those agents — a bias
+   capped well below the threshold at which anyone acts on a suspicion, so last
+   shift's drama colours the read without ever outvoting this shift's evidence.
 
 ## Layout
 
@@ -137,8 +182,10 @@ src/
   game/     engine.ts (phases, perception, kills, meetings, win conditions)
             vision.ts, perception.ts, tasks.ts, dialogue.ts, persistence.ts, map.ts,
             collision.ts, navigation.ts, crewmate.ts, imposter.ts, player.ts, rng.ts
+            creative.ts (generative log consoles), legacy.ts (cross-match ledger)
             render/renderMap.ts
-  components/ GameStage.tsx, GameHud.tsx, MeetingOverlay.tsx, TaskModal.tsx, GameOverlays.tsx
+  components/ GameStage.tsx, GameHud.tsx, MeetingOverlay.tsx, TaskModal.tsx,
+            GameOverlays.tsx, StationLog.tsx, Confessional.tsx, ThoughtFeed.tsx
 scripts/    validate-*.ts, simulate.ts, verify-llm.ts
 ```
 

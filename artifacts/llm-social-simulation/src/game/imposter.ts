@@ -38,6 +38,9 @@ export interface Imposter {
 
   /** Fake-tasking: standing still at a console pretending to work. */
   fakeProgress: number;
+  /** Consoles this imposter has finished pretending to work, and the last one. */
+  fakedTasks: number;
+  lastFakedPoiId: string | null;
 
   rngState: number;
 }
@@ -137,6 +140,8 @@ export function createImposters(map: GameMap, count = 2, seed = 101): Imposter[]
       lastVentId: start?.id ?? null,
       ventCount: 0,
       fakeProgress: 0,
+      fakedTasks: 0,
+      lastFakedPoiId: null,
       rngState: (seed + i * 7919) | 0 || 1,
     });
   }
@@ -247,6 +252,12 @@ function updateFaking(imp: Imposter, dt: number): void {
   imp.fakeProgress = Math.max(0, 1 - imp.timer / FAKE_DURATION);
   if (imp.timer > 0) return;
   imp.fakeProgress = 0;
+  // Bank the finished alibi before clearing the target: the engine reads this
+  // to let an imposter post a cover-story station-log entry. Whenever it does
+  // *not* read it, the `processed` mark advances too, so nothing is double
+  // counted — see the log accounting in engine.ts.
+  imp.fakedTasks++;
+  imp.lastFakedPoiId = imp.targetPoiId;
   imp.targetPoiId = null;
   goIdle(imp);
 }

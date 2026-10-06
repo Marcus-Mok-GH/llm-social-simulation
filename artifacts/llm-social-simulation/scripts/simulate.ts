@@ -307,6 +307,61 @@ function audit({ engine, kills }: Outcome, label: string): void {
     earliest === 0 || engine.time - earliest > 30,
     `${label}: the earliest remembered event is still present near the end`,
   );
+
+  // 9. The station log filled: the AI crew really wrote entries at the
+  //    generative consoles, with no key and no network (template path).
+  check(
+    engine.stationLog.length > 0,
+    `${label}: the AI crew filed station-log entries (${engine.stationLog.length})`,
+  );
+  check(
+    engine.stationLog.every((e) => e.source === "template"),
+    `${label}: with no key every log entry came from the offline template`,
+  );
+  check(
+    new Set(engine.stationLog.map((e) => e.poiId)).size === engine.stationLog.length,
+    `${label}: no console produced two log entries`,
+  );
+  check(
+    engine.stationLog.every((e) => e.text.trim().length > 0),
+    `${label}: every log entry has text`,
+  );
+
+  // 10. The confessional filled for every agent, including cover stories.
+  check(
+    engine.confessional.length > 0,
+    `${label}: agents recorded private thoughts (${engine.confessional.length})`,
+  );
+  check(
+    engine.confessional.some((c) => c.concealing),
+    `${label}: at least one traitor confessional is marked as a cover story`,
+  );
+  check(
+    engine.confessional.some((c) => !c.concealing),
+    `${label}: at least one crew confessional is candid`,
+  );
+  check(
+    new Set(engine.confessional.map((c) => c.key)).size > 1,
+    `${label}: more than one agent confesses`,
+  );
+
+  // 11. The cross-match ledger is inert headlessly — `localStorage` does not
+  //     exist under bun, so nothing may leak between simulated matches. The
+  //     end-of-match summary is still produced for the caller to fold.
+  check(
+    engine.legacyView() === null,
+    `${label}: no ledger view without storage`,
+  );
+  const summary = engine.legacySummary();
+  check(summary !== null, `${label}: a legacy summary is available at the end`);
+  check(
+    summary !== null && summary.roster.length === engine.actors.length,
+    `${label}: the legacy summary covers the whole roster`,
+  );
+  check(
+    summary !== null && summary.ejections.length === engine.ejects,
+    `${label}: every ejection is banked with its voters`,
+  );
 }
 
 console.log("=== Match A: player is crew ===");

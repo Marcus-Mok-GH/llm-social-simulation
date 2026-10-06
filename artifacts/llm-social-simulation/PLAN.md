@@ -14,8 +14,9 @@ Implemented and playable. Everything from Phases 0-6 below has landed in
 | 4 — AI agents | done | `src/ai/` (model + heuristic), `src/game/perception.ts`, `crewmate.ts`, `imposter.ts` |
 | 5 — Social systems & meetings | done | `src/game/engine.ts` meeting loop, `src/game/dialogue.ts`, `components/MeetingOverlay.tsx` |
 | 6 — UI/UX & theme | done | `src/App.tsx`, `src/components/*` |
-| 7 — Persistence & evaluation | partial | match history + transcripts + belief snapshots in `src/game/persistence.ts` (localStorage); Convex tables and replay UI still to do |
+| 7 — Persistence & evaluation | partial | match history + transcripts + belief snapshots in `src/game/persistence.ts` (localStorage); `src/game/legacy.ts` carries reputations and grudges *between* shifts; Convex tables and replay UI still to do |
 | 8 — Polish & deploy | partial | production build verified; audio/accessibility passes outstanding |
+| 9 — Watchability | done | generative log consoles (`src/game/creative.ts`), the per-agent confessional, and the cross-match ledger — see "Watching it" below |
 
 The decisions below that differ from this original plan:
 
@@ -29,6 +30,36 @@ The decisions below that differ from this original plan:
   claims can be audited against agent beliefs.
 - **Vitest was dropped** in favour of bun-run headless scripts that replay whole
   matches; they assert on outcomes rather than on units.
+
+### Watching it (post-Phase 6 pass)
+
+The simulation was readable but not *watchable*: everything an agent knew was
+in a transcript, and nothing it did produced anything to look at. Three systems
+fixed that, and each is deliberately cheap because the budget is a real
+constraint:
+
+- **Generative log consoles** (`src/game/creative.ts`). Ten of the fifteen task
+  consoles now ask the agent to write a sentence — a scan readout, an intercept
+  summary, a note on what was clogging the filter. The entry becomes a public
+  station log that every agent remembers and can quote, and an impostor's
+  cover story is filed alongside the real ones. Chosen so every AI crewmate's
+  *first* assigned console is generative, which is what makes the log fill in
+  the opening minute instead of racing the endgame.
+- **The confessional.** Every decision and meeting line carries the agent's
+  private thought as a second channel, the room never sees it, and a traitor's
+  is labelled a cover story. It is gated behind spectator mode / the verdict /
+  an explicit spoiler click, because it hands you the answer.
+- **The cross-match ledger** (`src/game/legacy.ts`). Wins, eliminations and
+  grudges persist between shifts, and a mislynched agent blames every voter.
+  The bias is capped at `MAX_GRUDGE`, below the threshold at which an agent acts
+  on a suspicion, so it shades the opening read without deciding a match.
+
+One engine change came out of this: AI crewmates never marked a console off
+`a.tasks`, so `hasUrgentInteraction` kept offering the same console and they
+re-worked it for the whole match instead of walking their assignment. With the
+mark restored they patrol their list, which is what makes the generative
+consoles reachable at all — and slows the task bar, so games now lean slightly
+further toward the imposters than they did.
 
 ## 1. Current State Review
 

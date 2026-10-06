@@ -2,16 +2,28 @@
  * Live model check.
  *
  * Exercises the *real* network path the game uses: `readLlmConfig()` reads the
- * key from the environment, `intentWithModel` asks for a movement intent and
- * `statementWithModel` asks for a meeting line. Both are validated exactly as
- * the engine validates them, so a pass here means agent reasoning works against
- * the configured endpoint rather than only the heuristic fallback.
+ * key from the environment, then every model entry point the engine calls is
+ * exercised against it — a movement intent, a meeting line, and a station-log
+ * entry — and each is validated exactly as the engine validates it. A pass here
+ * means agent reasoning works against the configured endpoint rather than only
+ * the heuristic fallback.
+ *
+ * Budget: this spends one call per model in the pool, plus six engine calls —
+ * two movement intents, two meeting statements and two station-log entries.
+ * Everything is paid for out of `ai.budget`, which the run prints at the end.
  *
  * Run: POLLINATIONS_API_KEY=pk_... bun scripts/verify-llm.ts
  *   or: BERGET_API_KEY=sk_ber_... bun scripts/verify-llm.ts
  */
 
-import { intentWithModel, statementWithModel, type AiContext, type WorldView } from "../src/ai/decision";
+import {
+  intentWithModel,
+  logEntryWithModel,
+  statementWithModel,
+  type AiContext,
+  type WorldView,
+} from "../src/ai/decision";
+import { logBriefFor } from "../src/game/creative";
 import {
   complete,
   configFor,
@@ -39,7 +51,7 @@ console.log(`Model    : ${cfg.model}`);
 console.log(`Pool     : ${provider.models.length} models (one per agent)`);
 console.log(`Key      : ${cfg.apiKey.slice(0, 7)}… (${cfg.apiKey.length} chars)`);
 
-const ai: AiContext = { cfg, gate: new RequestGate(0, 2), budget: { remaining: 20 } };
+const ai: AiContext = { cfg, gate: new RequestGate(0, 2), budget: { remaining: 24 } };
 
 type ZoneRef = WorldView["zones"][number];
 
@@ -125,6 +137,10 @@ function view(role: "crew" | "imposter"): WorldView {
     cooldowns: { kill: role === "imposter" ? 0 : 99, sabotage: role === "imposter" ? 0 : 99 },
     bodyOutstanding: false,
     taskProgress: 0.35,
+    // Cross-match context: this agent has played before and walked in already
+    // watching VEX. Non-empty on purpose, so the live run exercises the fields.
+    shifts_played: 3,
+    your_grudges: ["VEX"],
   };
 }
 
@@ -207,6 +223,16 @@ console.log("\n[meeting] statement:", JSON.stringify(stmt));
 check(stmt !== null, "agent produced a validated meeting statement");
 check((stmt?.line.length ?? 0) > 8, "statement is a real sentence");
 check(!((stmt as { accuse?: unknown } | null)?.accuse), "statement carries no accusation field");
+// The confessional rides on the same call: the private thought must come back
+// on the `thinking` channel, distinct from the line the crew hears.
+check(
+  typeof stmt?.thinking === "string" && stmt.thinking.trim().length > 0,
+  "statement also carries a private thought for the confessional",
+);
+check(
+  (stmt?.thinking ?? "").trim() !== (stmt?.line ?? "").trim(),
+  "the private thought is not just the public line repeated",
+);
 
 // --- 3. Imposter deflection ------------------------------------------------
 const impMind = createMind("imp:0", "imposter", ["imp:1"]);
@@ -237,7 +263,39 @@ console.log("\n[meeting] imposter line:", JSON.stringify(impStmt));
 check(impStmt !== null, "imposter produced a validated meeting statement");
 check(!((impStmt as { accuse?: unknown } | null)?.accuse), "imposter statement carries no accusation field");
 
-console.log(`\nModel requests used: ${20 - ai.budget.remaining}`);
+// --- 4. Station-log entry ---------------------------------------------------
+// The generative task path: one sentence of real content the crew can read.
+const brief = logBriefFor("task_medbay")!;
+const logLine = await logEntryWithModel(ai, {
+  authorName: "ROOK",
+  brief,
+  label: "Submit Scan",
+  room: "MedBay",
+  faked: false,
+  traitor: false,
+});
+console.log("\n[log] entry:", JSON.stringify(logLine));
+check(typeof logLine === "string" && logLine.length > 8, "agent wrote a station-log entry");
+check((logLine ?? "").length <= 180, "the log entry respects its length cap");
+check(!(logLine ?? "").includes("{"), "the log entry is prose, not raw JSON");
+
+// An impostor's entry must be a cover story, and the engine marks it as such.
+const impLog = await logEntryWithModel(ai, {
+  authorName: "SHADE",
+  brief,
+  label: "Submit Scan",
+  room: "MedBay",
+  faked: true,
+  traitor: true,
+});
+console.log("[log] imposter entry:", JSON.stringify(impLog));
+check(typeof impLog === "string" && impLog.length > 8, "imposter wrote a cover-story entry");
+check(
+  !/imposter|traitor|kill/i.test(impLog ?? ""),
+  "the cover story does not confess in writing",
+);
+
+console.log(`\nModel requests used: ${24 - ai.budget.remaining}`);
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);
   process.exit(1);
