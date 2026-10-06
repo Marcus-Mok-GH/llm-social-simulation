@@ -23,6 +23,16 @@ export function pointWalkable(x: number, y: number, rects: Rect[]): boolean {
 const SAMPLE_COUNT = 16;
 
 /**
+ * Longest single collision-checked step. The per-axis endpoint check below is
+ * only sound while a step is shorter than the actor's clearance: a step longer
+ * than twice the actor's radius could land on walkable ground on the far side
+ * of a wall and cross it in one frame. Anything longer than `MAX_STEP` is
+ * therefore split into fully-checked sub-steps, so a frame hitch, a large
+ * `dt`, or a future speed retune can never let an actor tunnel through a wall.
+ */
+const MAX_STEP = 6;
+
+/**
  * A circle is walkable when its centre *and* a ring of samples around its
  * perimeter all fall inside the union of walkable rects. Sampling (rather than
  * exact geometry) keeps the test simple and still handles seams where a circle
@@ -83,7 +93,8 @@ export function nearestStandable(
 /**
  * Axis-separated movement: try the X step, then the Y step. Each axis is only
  * committed if the result is walkable, which produces wall-sliding along
- * corridors instead of hard stops.
+ * corridors instead of hard stops. Steps longer than `MAX_STEP` are split
+ * into fully-checked sub-steps first (see the constant above).
  */
 export function moveWithCollision(
   map: GameMap,
@@ -92,6 +103,16 @@ export function moveWithCollision(
   dy: number,
   radius: number,
 ): Vec2 {
+  const dist = Math.hypot(dx, dy);
+  if (dist > MAX_STEP) {
+    const steps = Math.ceil(dist / MAX_STEP);
+    let p = pos;
+    for (let i = 0; i < steps; i++) {
+      p = moveWithCollision(map, p, dx / steps, dy / steps, radius);
+    }
+    return p;
+  }
+
   const rects = walkableRects(map);
   let { x, y } = pos;
 
