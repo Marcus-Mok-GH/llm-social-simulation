@@ -272,6 +272,13 @@ function audit({ engine, kills }: Outcome, label: string): void {
   //    recap of the meetings they attended.
   const meetingMinds = engine.actors.filter((a) => a.mind.meetings.length > 0);
   check(meetingMinds.length > 0, `${label}: at least one agent remembers a meeting`);
+  // The agents' spoken lines must reach the meeting chat itself, not just the
+  // thought feed and confessional — a silent room is the bug this guards.
+  const aiChatLines = engine.messages.filter((m) => m.kind === "statement");
+  check(
+    aiChatLines.length > 0,
+    `${label}: AI meeting lines appear in the chat (${aiChatLines.length})`,
+  );
   const recap = meetingMinds[0]?.mind.meetings.slice(-1)[0];
   check(
     recap !== undefined && recap.lines.length > 0,

@@ -2375,6 +2375,10 @@ export class GameEngine {
     const post = (stmt: Statement, source: ThoughtSource, json?: string | null): void => {
       // Late model replies must not leak into voting or the next meeting.
       if (this.meeting !== m || m.stage !== "discussion") return;
+      // The spoken line belongs in the meeting chat itself — without this the
+      // agents would only appear in the thought feed and confessional, and the
+      // room would read as silent.
+      this.say(a, stmt.line);
       // Meeting lines belong in the feed too: what the agent said and, for
       // model statements, the raw JSON reply the line was parsed out of.
       this.thoughts.push({

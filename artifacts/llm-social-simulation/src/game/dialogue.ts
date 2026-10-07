@@ -46,7 +46,7 @@ export function memoryToLine(
 
   switch (m.kind) {
     case "kill":
-      return `${speaker.name}: I watched ${who} kill someone in ${where}.`;
+      return `I watched ${who} kill someone in ${where}.`;
     case "body":
       return `I found a body in ${where}.`;
     case "vent":
