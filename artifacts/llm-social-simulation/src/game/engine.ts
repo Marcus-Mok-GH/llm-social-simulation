@@ -109,6 +109,15 @@ import {
   type Mind,
   type Role,
 } from "./perception";
+import {
+  claimMemoryText,
+  contradictionNote,
+  judgeClaim,
+  personaFor,
+  styleForIndex,
+  type Claim,
+  type DeceptionStyle,
+} from "./deception";
 import { createPlayer, updatePlayer, type Player } from "./player";
 import { makeRng, type Rng } from "./rng";
 import {
@@ -317,6 +326,8 @@ export interface Actor {
   actionFeedback: string | null;
   /** Body this agent intends to report, if any. */
   bodyToReport: number | null;
+  /** Traitors get a deception persona; crew and the human have none. */
+  deceptionStyle: DeceptionStyle | null;
   repathAt: number;
   killCooldown: number;
   /** Time until which this agent counts as actively repairing a sabotage. */
@@ -341,6 +352,11 @@ interface MeetingState {
   lastSpeaker: string | null;
   /** Index into `messages` where this meeting's transcript begins. */
   msgStart: number;
+  /**
+   * `speaker|kind|about` keys already applied this meeting, so one traitor
+   * repeating the same accusation cannot stack the same belief repeatedly.
+   */
+  claimsApplied: Set<string>;
 }
 
 export interface SpeakerView {
@@ -654,6 +670,7 @@ export class GameEngine {
         urgencyAt: 0,
         actionFeedback: null,
         bodyToReport: null,
+        deceptionStyle: null,
         repathAt: 0,
         killCooldown: 0,
         fixUntil: 0,
@@ -783,6 +800,7 @@ export class GameEngine {
       urgencyAt: 0,
       actionFeedback: null,
       bodyToReport: null,
+      deceptionStyle: role === "imposter" ? styleForIndex(index) : null,
       repathAt: 0,
       killCooldown: role === "imposter" ? 34 : 0,
       fixUntil: 0,
@@ -1608,6 +1626,10 @@ export class GameEngine {
       // already watching. A hunch it brought, never evidence from this round.
       shifts_played: this.legacy?.shifts ?? 0,
       your_grudges: this.grudgesByKey.get(a.key) ?? [],
+      // The traitor's deception persona; null for crew and for the human.
+      your_personality: a.deceptionStyle
+        ? { label: personaFor(a.deceptionStyle).label, playbook: personaFor(a.deceptionStyle).playbook }
+        : null,
     };
   }
 
@@ -1910,7 +1932,7 @@ export class GameEngine {
     this.confess(
       a,
       action,
-      reasoning?.trim() || confessionalFallback(a.mind, this.names),
+      reasoning?.trim() || confessionalFallback(a.mind, this.names, a.deceptionStyle),
       source,
     );
   }
@@ -1938,7 +1960,14 @@ export class GameEngine {
       // from the text, it is what the role means.
       concealing: a.role === "imposter",
     });
-    if (this.confessional.length > CONFESSIONAL_MAX) this.confessional.shift();
+    // The confessional is capped, but the traitors' cover stories are the
+    // reason it exists: evict the oldest *candid* entry first so a liar nobody
+    // can hear any more (because the crew caught and ejected it) still leaves
+    // its thoughts on the record. Only an all-cover buffer evicts the oldest.
+    if (this.confessional.length > CONFESSIONAL_MAX) {
+      const candid = this.confessional.findIndex((c) => !c.concealing);
+      this.confessional.splice(candid >= 0 ? candid : 0, 1);
+    }
   }
 
   /**
@@ -2195,6 +2224,7 @@ export class GameEngine {
       turnAt: this.time + 1.5,
       lastSpeaker: null,
       msgStart: this.messages.length,
+      claimsApplied: new Set(),
     };
 
     for (const a of living) a.voteAt = 0;
@@ -2370,6 +2400,9 @@ export class GameEngine {
       turn: m.spoken.get(a.key) ?? 1,
       bodiesFound: this.bodies.length,
       ejectedSoFar: [] as string[],
+      // A traitor's persona and the room it will claim it was working in.
+      style: a.deceptionStyle,
+      alibiRoomId: this.alibiRoomFor(a),
     };
 
     const post = (stmt: Statement, source: ThoughtSource, json?: string | null): void => {
@@ -2400,9 +2433,13 @@ export class GameEngine {
       this.confess(
         a,
         `Said: ${stmt.line.slice(0, 140)}${stmt.line.length > 140 ? "..." : ""}`,
-        stmt.thinking?.trim() || confessionalFallback(a.mind, this.names),
+        stmt.thinking?.trim() || confessionalFallback(a.mind, this.names, a.deceptionStyle),
         source,
       );
+
+      // A structured claim is public: hand it to every other listener's belief
+      // model, where it either shades their read or exposes the speaker.
+      this.applyClaim(a, m, stmt.claim);
     };
 
     if (this.llmEnabled && a.cfg) {
@@ -2427,9 +2464,68 @@ export class GameEngine {
   }
 
   /**
-   * Listeners simply hear what was said. Every agent speaks for itself —
-   * beliefs shift only from each listener's own observations, never from an
-   * engine-side accusation adjustment.
+   * The room a traitor will name in its alibi: the console it last faked work
+   * at, falling back to wherever it stands. Crew never offer an alibi, so this
+   * is null for them and the claim cannot be manufactured on their behalf.
+   */
+  private alibiRoomFor(a: Actor): RoomId | null {
+    if (a.kind !== "imposter") return null;
+    const imp = a.entity as Imposter;
+    const poi = imp.lastFakedPoiId
+      ? this.map.pointsOfInterest.find((p) => p.id === imp.lastFakedPoiId)
+      : undefined;
+    return roomAt(this.map, poi?.x ?? a.entity.x, poi?.y ?? a.entity.y).id;
+  }
+
+  /**
+   * Hand a statement's structured claim to every other living agent's belief
+   * model. The engine never invents a belief: it records what the listener
+   * *heard*, and the weight comes from the claim's kind — an unchallenged
+   * accusation raises suspicion, a vouch lowers it, and a claim the listener's
+   * own memory proves false brands the speaker a liar instead.
+   *
+   * One speaker may not stack the same claim on the same target all meeting,
+   * so a single traitor cannot talk a target over the voting threshold alone.
+   */
+  private applyClaim(speaker: Actor, m: MeetingState, claim: Claim | null | undefined): void {
+    if (!claim) return;
+    const id = `${speaker.key}|${claim.kind}|${claim.about}`;
+    if (m.claimsApplied.has(id)) return;
+    m.claimsApplied.add(id);
+
+    const roomId = claim.roomId ?? roomAt(this.map, speaker.entity.x, speaker.entity.y).id;
+    for (const listener of this.actors) {
+      if (listener === speaker || !listener.alive) continue;
+      const verdict = judgeClaim(listener.mind, speaker.key, claim, this.time);
+      if (verdict.contradicted) {
+        // Being falsely accused makes you *suspect* the accuser, not convict
+        // them: the weaker `accuse` weight. Only a lie the listener's memory
+        // can actually check — a wrong alibi, a disprovable sighting, a bad
+        // vouch — is a `caught` lie, and that is what gets a traitor voted out.
+        remember(listener.mind, {
+          t: this.time,
+          kind: verdict.reason === "self" ? "accuse" : "caught",
+          actorKey: speaker.key,
+          roomId,
+          text: contradictionNote(this.map, speaker.name, claim, verdict, this.names),
+        });
+      } else if (claim.kind === "accuse" || claim.kind === "vouch") {
+        remember(listener.mind, {
+          t: this.time,
+          kind: claim.kind === "accuse" ? "accuse" : "vouch",
+          actorKey: claim.about,
+          roomId,
+          text: claimMemoryText(this.map, speaker.name, claim, this.names),
+        });
+      }
+      // An alibi nobody can contradict is simply unverifiable and moves nothing.
+    }
+  }
+
+  /**
+   * What a listener hears, it may act on: a public claim enters its belief
+   * model through the same `remember` path as its own eyes, so what an agent
+   * says can always be audited against what it observed.
    */
   playerSay(text: string): void {
     if (this.spectator) return;

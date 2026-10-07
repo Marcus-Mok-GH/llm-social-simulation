@@ -36,7 +36,13 @@ export type MemoryKind =
   | "report"
   | "eject"
   /** A public station-log entry: flavour to reason about, never evidence. */
-  | "log";
+  | "log"
+  /** Someone publicly accused the actor — soft social pressure, not proof. */
+  | "accuse"
+  /** Someone publicly vouched for the actor — the only belief that can fall. */
+  | "vouch"
+  /** Someone said something this listener's own eyes prove false. */
+  | "caught";
 
 export interface MemoryEntry {
   /** Simulation time in seconds. */
@@ -138,6 +144,24 @@ const KIND_WEIGHT: Record<MemoryKind, number> = {
   flag: 0.35,
   /** Attribution of a triggered sabotage. */
   sabotage: 0.3,
+  /**
+   * A public accusation. Deliberately small: a lone accuser can shade a
+   * belief but can never, on its own, reach the threshold an agent votes on —
+   * manipulation has to be corroborated, exactly like real evidence.
+   */
+  accuse: 0.1,
+  /**
+   * A public vouch, the only *negative* weight: trust pulls a belief back down.
+   * Bounded by the clamp, so repeating it can never drive suspicion below 0.
+   */
+  vouch: -0.18,
+  /**
+   * A lie the listener's own memory exposed. This is the crew's identification
+   * mechanism — above the vote threshold, but low enough that a single
+   * contested sighting makes the liar the top suspect without ejecting them on
+   * one vote. Two independent catchers are what actually get a traitor out.
+   */
+  caught: 0.35,
   /** Neutral context: these memories inform reasoning, not suspicion. */
   sighted: 0,
   body: 0,
@@ -225,7 +249,10 @@ export function rememberMeeting(mind: Mind, entry: MeetingMemory): void {
 export function remember(mind: Mind, entry: MemoryEntry): void {
   mind.memories.push(entry);
   const weight = KIND_WEIGHT[entry.kind];
-  if (weight > 0) bump(mind, entry.actorKey, weight);
+  // Signed on purpose: accusations push a belief up, a vouch pulls it down,
+  // and everything else leaves it alone. `bump` clamps, so neither direction
+  // can escape [0, 1].
+  if (weight !== 0) bump(mind, entry.actorKey, weight);
 }
 
 /**

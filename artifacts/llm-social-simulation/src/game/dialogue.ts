@@ -10,6 +10,15 @@
 
 import { rankSuspects, type MemoryEntry, type Mind } from "./perception";
 import { roomById, type GameMap, type RoomId } from "./map";
+import {
+  claimLine,
+  crewClaim,
+  fabricateClaim,
+  personaFor,
+  type Claim,
+  type ClaimContext,
+  type DeceptionStyle,
+} from "./deception";
 
 /** key -> display name, so memory text reads like speech rather than ids. */
 export type NameIndex = Record<string, string>;
@@ -23,6 +32,12 @@ export interface Statement {
    * the engine synthesises a stand-in for heuristic lines.
    */
   thinking?: string | null;
+  /**
+   * A structured public assertion the line makes — who it accuses, who it
+   * vouches for, or the alibi it claims. This is what the engine hands to every
+   * listener's belief model, so a lie can actually move the room (and be caught).
+   */
+  claim?: Claim | null;
 }
 
 export interface Speaker {
@@ -59,6 +74,12 @@ export function memoryToLine(
       return m.text;
     case "flag":
       return m.text;
+    // Claims and caught lies are already written as full sentences by
+    // `game/deception.ts`, so they are quoted verbatim rather than rephrased.
+    case "accuse":
+    case "vouch":
+    case "caught":
+      return m.text;
     case "report":
     case "eject":
       return null;
@@ -82,9 +103,37 @@ export function heuristicStatement(
   mind: Mind,
   speaker: Speaker,
   names: NameIndex,
-  ctx: { others: string[]; playerLine: string | null; turn?: number },
+  ctx: {
+    others: string[];
+    playerLine: string | null;
+    turn?: number;
+    /** Where a scripted traitor claims it was working, for its alibi. */
+    alibiRoomId?: RoomId | null;
+    /** The traitor's deception persona, when it has one. */
+    style?: DeceptionStyle | null;
+  },
 ): Statement {
   const turn = ctx.turn ?? 0;
+
+  // A claim is the social move: a traitor frames or defends, a crewmate
+  // presses its evidence. When there is one, the line is generated from it so
+  // the spoken words and the structured claim can never disagree.
+  const claimCtx: ClaimContext = {
+    others: ctx.others,
+    names,
+    selfKey: mind.key,
+    seed: turn * 7 + mind.memories.length,
+    turn,
+    alibiRoomId: ctx.alibiRoomId ?? null,
+  };
+  const claim =
+    mind.role === "imposter"
+      ? fabricateClaim(ctx.style ?? "wire-puller", mind, map, claimCtx)
+      : crewClaim(mind, claimCtx);
+  if (claim) {
+    return { line: claimLine(map, claim, names, turn), claim };
+  }
+
   const priority: MemoryEntry["kind"][] = ["kill", "vent", "flag", "body", "sabotage", "sighted", "task"];
 
   for (const kind of priority) {
@@ -150,20 +199,27 @@ export function heuristicStatement(
  * and the scripted beliefs already know that. Impostors get a cover-story line,
  * crew get their genuine read of the room.
  */
-export function confessionalFallback(mind: Mind, names: NameIndex): string {
+export function confessionalFallback(
+  mind: Mind,
+  names: NameIndex,
+  style?: DeceptionStyle | null,
+): string {
   const top = rankSuspects(mind, 0.12)[0];
   const who = top ? names[top.key] ?? top.key : null;
 
   if (mind.role === "imposter") {
+    // The persona only flavours *how* the cover story is told; every traitor
+    // still deflects and protects its team.
+    const as = style ? `Play the ${personaFor(style).label.toLowerCase()}: ` : "";
     if (mind.allies.length > 0) {
       const ally = names[mind.allies[0]] ?? mind.allies[0];
       return who
-        ? `Keep it steady — let ${who} take the heat, and never cross ${ally}.`
-        : `Keep it steady. ${ally} and I just need one clean kill.`;
+        ? `${as}keep it steady — let ${who} take the heat, and never cross ${ally}.`
+        : `${as}keep it steady. ${ally} and I just need one clean kill.`;
     }
     return who
-      ? `Say nothing useful. ${who} is the name the room wants to hear.`
-      : "Say nothing useful. Let the room fill the silence itself.";
+      ? `${as}say nothing useful. ${who} is the name the room wants to hear.`
+      : `${as}say nothing useful. Let the room fill the silence itself.`;
   }
 
   if (who) return `No proof yet — but I keep coming back to ${who}.`;

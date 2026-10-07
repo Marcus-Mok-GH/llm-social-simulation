@@ -61,6 +61,30 @@ mark restored they patrol their list, which is what makes the generative
 consoles reachable at all — and slows the task bar, so games now lean slightly
 further toward the imposters than they did.
 
+### Deception and identification (post-Phase 9 pass)
+
+The traitors could already lie in prose, but nothing they said moved anyone:
+beliefs came only from each agent's own eyes, so a traitor's manipulation never
+reached the crew. That is fixed — the game now simulates both sides of the lie:
+
+- **Personas.** `src/game/deception.ts` hands every traitor one of four
+  deception styles (wire-puller, provocateur, confidant, ghost), carried into
+  the decision/meeting prompts and the offline fallback.
+- **Claims.** A meeting statement may carry a structured `accuse` / `vouch` /
+  `alibi`. The engine hands each claim to every listener's belief model through
+  the same `perception.remember` path as observation, with per-kind weights:
+  an accusation shades suspicion (`accuse`), a vouch is the only negative weight,
+  and a lie the listener's memory disproves brands the speaker (`caught`).
+- **Identification.** `judgeClaim` checks a claim against the listener's own
+  sighting memory: a wrong alibi, a disprovable location, a bad vouch, or an
+  accusation aimed at the listener itself. Caught lies are what let the crew
+  vote a traitor out — the fallibility the crew is supposed to argue against.
+
+Balance was tuned so the mechanic is real but not a coin flip: accusations sit
+below the vote threshold alone, being falsely accused is a suspicion rather than
+conviction, lies are front-loaded to a couple of turns per meeting, and only the
+provocateur offers a checkable room or alibi offline.
+
 ## 1. Current State Review
 
 The repository is **empty except for a README and a single commit** — there is no

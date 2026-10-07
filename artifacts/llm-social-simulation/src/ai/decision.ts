@@ -31,6 +31,12 @@ import { heuristicStatement, memoryDigest, type NameIndex, type Statement } from
 import { buildLogPrompt, parseLogEntry, type LogBrief } from "../game/creative";
 import type { GameMap, RoomId } from "../game/map";
 import { roomById } from "../game/map";
+import {
+  isClaimKind,
+  personaFor,
+  type Claim,
+  type DeceptionStyle,
+} from "../game/deception";
 
 // ---------------------------------------------------------------------------
 // What an agent knows about the world this tick
@@ -183,6 +189,12 @@ export interface WorldView {
    * An opening bias only — never evidence for this round.
    */
   your_grudges: string[];
+  /**
+   * The deception persona a traitor was handed at roster build — null for
+   * crew. It shapes how this agent lies (boldly, quietly, protectively), and is
+   * what makes two traitors behave differently across matches.
+   */
+  your_personality: { label: string; playbook: string } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +270,9 @@ function systemPrompt(view: WorldView): string {
       "and slip into vents to escape.",
       `Your fellow traitors: ${view.known_allies.length > 0 ? view.known_allies.join(", ") : "none"}. You can never act against them.`,
       `Kill cooldown: ${Math.ceil(view.cooldowns.kill)}s. Sabotage cooldown: ${Math.ceil(view.cooldowns.sabotage)}s.`,
+      view.your_personality
+        ? `Your deception style is the ${view.your_personality.label}. ${view.your_personality.playbook}`
+        : "Manage your alibi as carefully as your kills.",
       ...common,
     ].join("\n");
   }
@@ -299,6 +314,7 @@ function summarise(view: WorldView): Record<string, unknown> {
     system_message: view.system_message,
     shifts_played: view.shifts_played,
     your_grudges: view.your_grudges,
+    your_personality: view.your_personality,
   };
 }
 
@@ -559,13 +575,22 @@ export interface StatementInput {
   turn: number;
   bodiesFound: number;
   ejectedSoFar: string[];
+  /** The speaker's deception persona, when it is a traitor. */
+  style?: DeceptionStyle | null;
+  /** The room a scripted traitor will claim it was working in. */
+  alibiRoomId?: RoomId | null;
 }
 
-function statementSystem(mind: Mind): string {
+/** The structured-claim instruction shared by both roles. */
+const CLAIM_SCHEMA =
+  'Optionally add "claim" when you assert something the room can act on: {"kind":"accuse"|"vouch"|"alibi","about":"<player name>","room":"<room name or empty>","detail":"<=6 words"}. Use "accuse" to point at someone, "vouch" to clear someone, and "alibi" to say where you were (for an alibi, about is yourself).';
+
+function statementSystem(mind: Mind, style?: DeceptionStyle | null): string {
   const live = [
     "This is a live group discussion: read the conversation so far, react to what others — including the human player — said, and answer the human directly if they addressed you.",
     "Never repeat a line that anyone has already said.",
-    "Speak for yourself. Say what you saw, what you remember and what you believe — do not formally accuse or demand a vote; that is the room's call, not yours.",
+    "Speak for yourself. Say what you saw, what you remember and what you believe — do not formally demand a vote; that is the room's call, not yours.",
+    CLAIM_SCHEMA,
     // The two-channel reply is the confessional: `line` is heard by the crew,
     // `thinking` is heard only by the audience.
     'Also fill "thinking": your private read of the room, at most 15 words. It is NEVER spoken aloud and the other players never see it, so it may be candid — what you really believe, what you are hiding, and who you are steering toward.',
@@ -573,18 +598,82 @@ function statementSystem(mind: Mind): string {
     'Reply with ONLY JSON: {"line":"<one or two sentences>","thinking":"<at most 15 words, private>"}',
   ];
   if (mind.role === "imposter") {
+    const persona = style ? personaFor(style) : null;
     return [
       "You are the hidden traitor in a social-deduction meeting aboard a space station.",
       "Stay calm, deflect, never reveal yourself, and steer suspicion toward an innocent crew member through what you say.",
-      "Do not contradict facts you could not possibly know.",
+      persona
+        ? `Your deception style is the ${persona.label}. ${persona.playbook}`
+        : "Manage your story carefully and never contradict facts you could not know.",
+      "You may lie in a claim: fabricate a sighting to frame a crewmate, vouch for your fellow traitor, or give yourself an alibi. But a listener who saw the truth with its own eyes will catch you — prefer claims the room cannot verify.",
       ...live,
     ].join("\n");
   }
   return [
     "You are an honest crew member in a social-deduction meeting aboard a space station.",
     "Report what you remember and share who you find suspicious. One or two sentences, spoken aloud.",
+    "Claim only what you actually saw or believe; you have no reason to invent anything.",
     ...live,
   ].join("\n");
+}
+
+/** Resolve a spoken room name/id back to a RoomId, or undefined if unknown. */
+function resolveRoom(map: GameMap, raw: unknown): RoomId | undefined {
+  if (typeof raw !== "string") return undefined;
+  const q = raw.trim().toLowerCase();
+  if (!q) return undefined;
+  const room = map.rooms.find(
+    (r) => r.id === q || r.name.toLowerCase() === q || r.short.toLowerCase() === q,
+  );
+  return room?.id;
+}
+
+function detailOf(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const t = raw.trim();
+  return t ? t.slice(0, 60) : undefined;
+}
+
+/** Resolve a player name (or key) to a living actor key, restricted to `others`. */
+function resolveActor(names: NameIndex, others: string[], raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const q = raw.trim().toLowerCase();
+  if (!q) return null;
+  for (const key of others) {
+    if (key.toLowerCase() === q || (names[key] ?? "").toLowerCase() === q) return key;
+  }
+  return null;
+}
+
+/**
+ * Validate the model's optional structured claim. Only the shape is checked
+ * here; the engine remains the referee for what a claim is worth. A traitor
+ * may lie freely; a crewmate may not manufacture an alibi it did not make, and
+ * nobody claims anything about an ally.
+ */
+function parseClaim(
+  raw: unknown,
+  map: GameMap,
+  mind: Mind,
+  speaker: { key: string; name: string },
+  names: NameIndex,
+  input: StatementInput,
+): Claim | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj.kind !== "string" || !isClaimKind(obj.kind)) return null;
+  const kind = obj.kind;
+
+  if (kind === "alibi") {
+    // Only a traitor scripts an alibi; an honest crewmate reports what it saw.
+    if (mind.role !== "imposter") return null;
+    return { kind, about: speaker.key, roomId: resolveRoom(map, obj.room), detail: detailOf(obj.detail) };
+  }
+
+  const target = resolveActor(names, input.others, obj.about);
+  if (!target || target === speaker.key) return null;
+  if (mind.allies.includes(target)) return null;
+  return { kind, about: target, roomId: resolveRoom(map, obj.room), detail: detailOf(obj.detail) };
 }
 
 function nameOf(names: NameIndex, key: string): string {
@@ -620,6 +709,7 @@ export async function statementWithModel(
       lines: m.lines,
       ejected: m.ejected ? m.ejected.name : null,
     })),
+    yourDeceptionStyle: mind.role === "imposter" && input.style ? personaFor(input.style).label : null,
     instruction:
       "This discussion is ongoing — build on the conversation so far and on what the human said (answer them directly if they spoke to you), and never repeat anything already said. Speak for yourself, from your own memory: only produce the spoken line.",
   };
@@ -632,7 +722,7 @@ export async function statementWithModel(
     const text = await complete(
       ctx.cfg,
       [
-        { role: "system", content: statementSystem(mind) },
+        { role: "system", content: statementSystem(mind, input.style) },
         { role: "user", content: JSON.stringify(payload) },
       ],
       // Generous enough that a max-effort reasoning model still emits the
@@ -642,7 +732,7 @@ export async function statementWithModel(
     if (!text) return null;
     ctx.onRaw?.(text);
 
-    const parsed = extractJson<{ line?: unknown; thinking?: unknown }>(text);
+    const parsed = extractJson<{ line?: unknown; thinking?: unknown; claim?: unknown }>(text);
     if (!parsed || typeof parsed.line !== "string" || parsed.line.trim().length === 0) return null;
 
     const line = parsed.line.trim().slice(0, 240);
@@ -650,7 +740,8 @@ export async function statementWithModel(
       typeof parsed.thinking === "string" && parsed.thinking.trim().length > 0
         ? parsed.thinking.trim().slice(0, 200)
         : null;
-    return { line, thinking };
+    const claim = parseClaim(parsed.claim, map, mind, speaker, names, input);
+    return { line, thinking, claim };
   } finally {
     release();
   }
@@ -713,6 +804,8 @@ export function fallbackStatement(
     others: input.others,
     playerLine: input.playerLine,
     turn: input.turn,
+    alibiRoomId: input.alibiRoomId ?? null,
+    style: input.style ?? null,
   });
 }
 

@@ -20,6 +20,7 @@ to trust, and **argue and vote** in meetings.
 | **Meetings** | Report or emergency beacon → discussion → voting → tally → ejection |
 | **Belief model** | Per-agent complete match log (every event, sighting, decision and meeting, from start to finish) + suspicion vector with decay, vent sightings, body-room inference |
 | **LLM decision loop** | A configurable OpenAI-compatible provider (Pollinations or Berget) returns validated JSON intents (`MOVE`/`INTERACT`/`VENT`/`SABOTAGE`) and meeting lines; each AI agent runs a **different** model from a cheap-model pool, with heuristic fallback on any failure |
+| **Deception & identification** | Every traitor is handed a persona (wire-puller / provocateur / confidant / ghost) and lies in meetings with structured claims — `accuse`, `vouch`, `alibi`. Every listener weighs a claim against its own memory: an unverifiable smear only shades suspicion, but a claim its own eyes contradict brands the speaker a liar (`caught`) — the crew's way of identifying imposters |
 | **Persistence** | Finished matches, transcripts and every agent's suspicion snapshot saved to `localStorage` |
 | **Station log** | Ten consoles ask the crew to *write* a line (a scan readout, an intercept summary, a cargo note) instead of waiting out a timer. Entries are public — every agent can quote them in a meeting — and a traitor writes a cover story |
 | **Confessional** | Every decision and meeting line carries the agent's private thought, one channel underneath the public one. Sealed while you are playing (it spoils the match), legible while spectating or after the verdict |
@@ -155,6 +156,12 @@ POLLINATIONS_API_KEY=... pnpm --filter @workspace/llm-social-simulation run veri
   always a cover story, a grudge is capped below the threshold an agent acts on,
   and the ledger round-trips through the engine (including the end-of-match fold
   the UI performs).
+- `scripts/validate-deception.ts` — the deception layer: every persona is
+  distinct, an alibi or accusation that clashes with the listener's own sighting
+  is caught (and a stale one is not), a bad vouch for someone the listener
+  watched vent is caught, an unchallenged accusation raises suspicion but never
+  past the vote threshold, and a whole model-free match actually produces public
+  accusations — all through the real `remember` belief path.
 - `scripts/validate-recap.ts` — the recap layer: real matches emit an ordered,
   well-formed timeline (kills name a killer/victim/room and whether they were
   seen, ejections carry the true role and voters, the verdict is always last),
@@ -193,13 +200,41 @@ the end screen folds that timeline — plus the confessional — into a compact
 story with one spotlighted beat and the line the audience takes away. It is
 pure and deterministic, so a saved match re-narrates identically.
 
+## Deception and identification
+
+A traitor that only follows the room is not a traitor. Both sides of the lie are
+simulated:
+
+- **Every traitor gets a persona.** The roster hands each of them one of four
+  playbooks — a patient **wire-puller**, a loud **provocateur**, a trust-building
+  **confidant**, or a quiet **ghost** — carried in the decision and meeting
+  prompts and in the offline fallback, so two traitors never lie the same way.
+- **They lie in structured claims, not prose.** A meeting line can carry an
+  `accuse`, a `vouch` or an `alibi`. It is the claim, not the sentence, that the
+  room acts on: an unchallenged accusation nudges every listener's belief about
+  the target, and a vouch is the only thing in the game that pulls a belief back
+  down. A single accusation is deliberately weighted below the vote threshold,
+  so manipulation has to be corroborated to convict anyone.
+- **The crew is trying to catch them.** `judgeClaim` checks each claim against
+  the listener's *own* memory. A wrong alibi, an accusation about a room the
+  listener saw the target in a different room during, or a vouch for someone the
+  listener watched vent all brand the speaker with a `caught` memory — heavy
+  enough to make the liar the clear top suspect. Claims flow through the same
+  `remember` path as first-hand observation, so no belief is ever moved by an
+  engine-side verdict.
+
+Balance matters here: the careful personas smear without a location to check,
+and only the provocateur hands out a catchable story, so the crew can identify a
+traitor without the first loud liar instantly losing the match.
+
 ## Layout
 
 ```
 src/
   ai/       llm.ts (transport + JSON extraction), decision.ts (intents, dialogue, fallbacks)
   game/     engine.ts (phases, perception, kills, meetings, win conditions)
-            vision.ts, perception.ts, tasks.ts, dialogue.ts, persistence.ts, map.ts,
+            vision.ts, perception.ts, tasks.ts, dialogue.ts, deception.ts (personas,
+            claims, lie-catching), persistence.ts, map.ts,
             collision.ts, navigation.ts, crewmate.ts, imposter.ts, player.ts, rng.ts
             creative.ts (generative log consoles), legacy.ts (cross-match ledger)
             render/renderMap.ts
