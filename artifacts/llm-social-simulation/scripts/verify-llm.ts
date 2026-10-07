@@ -162,7 +162,7 @@ for (const model of provider.models) {
     configFor(provider, model),
     [{ role: "user", content: 'Reply with only the JSON {"ok":true}' }],
     // Generous headroom: reasoning runs at max effort, so reasoning-heavy
-    // models (GPT-5 Nano, MiniMax) spend most of the budget thinking before
+    // models (MiniMax) spend most of the budget thinking before
     // the tiny JSON answer.
     { json: true, maxTokens: 800 },
   );

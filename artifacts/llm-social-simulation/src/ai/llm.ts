@@ -63,11 +63,10 @@ export interface ProviderConfig {
 export const POLLINATIONS_BASE_URL = "https://gen.pollinations.ai/v1";
 export const POLLINATIONS_MODELS = [
   "openai/gpt-6-luna",
-  "openai/gpt-5-nano",
+  "nvidia/nemotron-3.5-lightning",
   "minimax/minimax-m3",
   "deepseek/deepseek-v4.1-flash",
   "mistralai/mistral-large-3",
-  "openai/gpt-5.4-nano",
 ] as const;
 
 /**
@@ -87,11 +86,10 @@ export const POLLINATIONS_IMPOSTER_MODELS = [
  */
 const MODEL_DISPLAY_NAMES: Record<string, string> = {
   "openai/gpt-6-luna": "GPT-6 Luna",
-  "openai/gpt-5-nano": "GPT-5 Nano",
   "minimax/minimax-m3": "Minimax M3",
   "deepseek/deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
   "mistralai/mistral-large-3": "Mistral Large 3",
-  "openai/gpt-5.4-nano": "GPT-5.4 Nano",
+  "nvidia/nemotron-3.5-lightning": "Nemotron 3.5 Lightning",
   "mistral-small": "Mistral Small",
 };
 

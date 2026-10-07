@@ -95,8 +95,8 @@ The pool is six cheap, **official** models — community models are excluded bec
 they can vanish mid-match:
 
 ```
-openai/gpt-6-luna   openai/gpt-5-nano   minimax/minimax-m3
-deepseek/deepseek-v4.1-flash   mistralai/mistral-large-3   openai/gpt-5.4-nano
+openai/gpt-6-luna   nvidia/nemotron-3.5-lightning   minimax/minimax-m3
+deepseek/deepseek-v4.1-flash   mistralai/mistral-large-3
 ```
 
 Two Pollinations details matter:
@@ -109,7 +109,7 @@ Two Pollinations details matter:
   imposters: the engine hands the traitor role only to those two and keeps them
   out of the crew pool, so the crew across a match are the other four models.
 - A match fires up to 150 model calls, so the whole pool is priced in fractions of
-  a Pollen per million tokens. GPT-5 Nano and GPT-6 Luna need JSON mode to answer,
+  a Pollen per million tokens. GPT-6 Luna needs JSON mode to answer,
   which the game always requests.
 
 Set `VITE_POLLINATIONS_MODELS` to replace the pool (for example with models your
