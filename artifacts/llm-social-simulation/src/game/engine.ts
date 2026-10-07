@@ -612,11 +612,16 @@ export class GameEngine {
     // get a number so every agent stays uniquely addressable in prompts.
     const aiNames: string[] = [];
     const seenNames = new Map<string, number>();
-    for (let i = 0; i < this.crewmates.length + this.imposters.length; i++) {
-      const base = this.agentDisplayName(i);
+    const pushName = (base: string): void => {
       const seen = (seenNames.get(base) ?? 0) + 1;
       seenNames.set(base, seen);
       aiNames.push(seen === 1 ? base : `${base}-${seen}`);
+    };
+    for (let i = 0; i < this.crewmates.length; i++) {
+      pushName(this.agentDisplayName("crew", i));
+    }
+    for (let i = 0; i < this.imposters.length; i++) {
+      pushName(this.agentDisplayName("imposter", i));
     }
 
     const playerMind = createMind("player", playerRole, playerIsImposter ? imposterKeys : []);
@@ -656,14 +661,9 @@ export class GameEngine {
         return this.makeActor(`crew:${i}`, e, "crew", i, aiNames[i]);
       }),
       ...this.imposters.map((e, i) => {
-        e.name = aiNames[this.crewmates.length + i];
-        return this.makeActor(
-          `imp:${i}`,
-          e,
-          "imposter",
-          this.crewmates.length + i,
-          aiNames[this.crewmates.length + i],
-        );
+        const name = aiNames[this.crewmates.length + i];
+        e.name = name;
+        return this.makeActor(`imp:${i}`, e, "imposter", i, name);
       }),
     ];
 
@@ -767,7 +767,7 @@ export class GameEngine {
       zoneId: "",
       entity,
       mind: createMind(key, role),
-      cfg: this.modelFor(index),
+      cfg: this.modelFor(index, role),
       tasks: [],
       processed: 0,
       counted: 0,
@@ -785,14 +785,37 @@ export class GameEngine {
   }
 
   /**
-   * Bind agent `index` to its own model from the active provider's cheap pool.
-   * The pool is walked in order and wrapped only if it runs short, so in the
-   * normal 4-crew + 2-imposter match every AI player is a different model.
+   * Bind agent `index` of `role` to its own model from the active provider's
+   * cheap pool. Crew and imposters draw from separate pools: only the
+   * designated traitor models may be imposters, and they never play crew, so
+   * the traitors are the same pair of models every match. Within a pool the
+   * list is walked in order and wrapped only if it runs short.
    */
-  private modelFor(index: number): LlmConfig | null {
-    if (!this.provider || this.provider.models.length === 0) return null;
-    const model = this.provider.models[index % this.provider.models.length];
+  private modelFor(
+    index: number,
+    role: "crew" | "imposter" = "crew",
+  ): LlmConfig | null {
+    if (!this.provider) return null;
+    const pool = role === "imposter" ? this.imposterModels() : this.crewModels();
+    if (pool.length === 0) return null;
+    const model = pool[index % pool.length];
     return configFor(this.provider, model);
+  }
+
+  /** Crew models: the provider pool minus the reserved imposter models. */
+  private crewModels(): string[] {
+    if (!this.provider) return [];
+    const reserved = new Set(this.provider.imposterModels);
+    const crewOnly = this.provider.models.filter((m) => !reserved.has(m));
+    return crewOnly.length > 0 ? crewOnly : this.provider.models;
+  }
+
+  /** Imposter models: the designated traitor models, or the pool if none. */
+  private imposterModels(): string[] {
+    if (!this.provider) return [];
+    return this.provider.imposterModels.length > 0
+      ? this.provider.imposterModels
+      : this.provider.models;
   }
 
   /**
@@ -807,12 +830,12 @@ export class GameEngine {
   }
 
   /**
-   * Display name for roster slot `index`: the model that runs that agent.
-   * With no provider configured (pure heuristic mode) there is no model name,
-   * so agents are simply numbered AI-1, AI-2, …
+   * Display name for a roster slot: the model that runs that agent. With no
+   * provider configured (pure heuristic mode) there is no model name, so
+   * agents are simply numbered AI-1, AI-2, …
    */
-  private agentDisplayName(index: number): string {
-    const cfg = this.modelFor(index);
+  private agentDisplayName(role: "crew" | "imposter", index: number): string {
+    const cfg = this.modelFor(index, role);
     if (!cfg) return `AI-${index + 1}`;
     return this.modelNameOf(cfg);
   }

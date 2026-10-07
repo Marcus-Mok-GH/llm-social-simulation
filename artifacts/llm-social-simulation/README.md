@@ -71,13 +71,16 @@ The game talks to OpenAI-compatible chat-completions endpoints directly from the
 browser. Two providers are supported and both are CORS-enabled. **Pollinations
 is preferred when its key is present**, and every AI agent is assigned its own
 model from the provider's pool — in the normal 4-crew + 2-imposter match, all six
-AI players are different models.
+AI players are different models. Two of those models are reserved for the
+traitor role: **only GPT-6 Luna and DeepSeek V4.1 Flash can be imposters**, and
+they never play an honest crewmate, so every match's traitors are that pair.
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `POLLINATIONS_API_KEY` / `VITE_POLLINATIONS_API_KEY` | — | Pollinations key (app `pk_` keys are safe for browsers; `sk_` keys are server-only). |
 | `VITE_POLLINATIONS_BASE_URL` | `https://gen.pollinations.ai/v1` | Pollinations endpoint. |
 | `VITE_POLLINATIONS_MODELS` | see below | Comma-separated override for the model pool. |
+| `VITE_POLLINATIONS_IMPOSTER_MODELS` | `openai/gpt-6-luna,deepseek/deepseek-v4.1-flash` | The only models allowed to be imposters. |
 | `BERGET_API_KEY` / `VITE_LLM_API_KEY` | — | Berget key. |
 | `BERGET_BASE_URL` / `VITE_LLM_BASE_URL` | `https://api.berget.ai/v1` | Berget endpoint. |
 | `BERGET_MODEL` / `VITE_LLM_MODEL` | `mistral-small` | Berget model (Berget has no model pool). |
@@ -100,6 +103,9 @@ Two Pollinations details matter:
   full one. A key with a Quest balance but no paid balance gets
   `402 INSUFFICIENT_BALANCE` on models outside that catalog, which is why every
   model here was picked from the Quest-eligible set.
+- `openai/gpt-6-luna` and `deepseek/deepseek-v4.1-flash` are the designated
+  imposters: the engine hands the traitor role only to those two and keeps them
+  out of the crew pool, so the crew across a match are the other four models.
 - A match fires up to 150 model calls, so the whole pool is priced in fractions of
   a Pollen per million tokens. GPT-5 Nano and GPT-6 Luna need JSON mode to answer,
   which the game always requests.

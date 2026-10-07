@@ -40,6 +40,11 @@ export interface ProviderConfig {
   timeoutMs: number;
   /** Cheap models, in preference order. Distinct agents get distinct models. */
   models: string[];
+  /**
+   * The only models allowed to be imposters. Crew are drawn from `models`
+   * minus these, so a traitor model never also plays an honest crewmate.
+   */
+  imposterModels: string[];
 }
 
 /**
@@ -63,6 +68,17 @@ export const POLLINATIONS_MODELS = [
   "deepseek/deepseek-v4.1-flash",
   "mistralai/mistral-large-3",
   "openai/gpt-5.4-nano",
+] as const;
+
+/**
+ * The only models the engine is allowed to cast as imposters: GPT-6 Luna and
+ * DeepSeek V4.1 Flash. Every other pool model is crew, and these two never
+ * play an honest crewmate, so a match's traitors are always the same pair of
+ * models. Override with `VITE_POLLINATIONS_IMPOSTER_MODELS`.
+ */
+export const POLLINATIONS_IMPOSTER_MODELS = [
+  "openai/gpt-6-luna",
+  "deepseek/deepseek-v4.1-flash",
 ] as const;
 
 /**
@@ -174,11 +190,19 @@ export function readProviders(): ProviderConfig[] {
       apiKey: pollinationsKey,
       timeoutMs,
       models: modelList(readEnv("VITE_POLLINATIONS_MODELS"), POLLINATIONS_MODELS),
+      imposterModels: modelList(
+        readEnv("VITE_POLLINATIONS_IMPOSTER_MODELS"),
+        POLLINATIONS_IMPOSTER_MODELS,
+      ),
     });
   }
 
   const bergetKey = readEnv("VITE_LLM_API_KEY") ?? readEnv("BERGET_API_KEY");
   if (bergetKey) {
+    const models = modelList(
+      readEnv("VITE_LLM_MODEL") ?? readEnv("BERGET_MODEL"),
+      [BERGET_DEFAULT_MODEL],
+    );
     providers.push({
       provider: "berget",
       baseUrl: (
@@ -188,10 +212,9 @@ export function readProviders(): ProviderConfig[] {
       ).replace(/\/+$/, ""),
       apiKey: bergetKey,
       timeoutMs,
-      models: modelList(
-        readEnv("VITE_LLM_MODEL") ?? readEnv("BERGET_MODEL"),
-        [BERGET_DEFAULT_MODEL],
-      ),
+      models,
+      // Berget has no model pool, so its single model plays every role.
+      imposterModels: models,
     });
   }
 
