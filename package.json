@@ -20,10 +20,11 @@
     "validate:imposters": "cd artifacts/llm-social-simulation && bun scripts/validate-imposters.ts",
     "validate:walls": "cd artifacts/llm-social-simulation && bun scripts/validate-walls.ts",
     "validate:watchability": "cd artifacts/llm-social-simulation && bun scripts/validate-watchability.ts",
+    "validate:recap": "cd artifacts/llm-social-simulation && bun scripts/validate-recap.ts",
     "validate:ui": "cd artifacts/llm-social-simulation && bun scripts/validate-ui.tsx",
     "simulate": "cd artifacts/llm-social-simulation && bun scripts/simulate.ts",
     "verify:llm": "cd artifacts/llm-social-simulation && bun scripts/verify-llm.ts",
-    "check": "pnpm run typecheck && pnpm run validate:map && pnpm run validate:movement && pnpm run validate:touch && pnpm run validate:render && pnpm run validate:spectator && pnpm run validate:ui && pnpm run validate:ai && pnpm run validate:interactions && pnpm run validate:imposters && pnpm run validate:walls && pnpm run validate:watchability && pnpm run simulate"
+    "check": "pnpm run typecheck && pnpm run validate:map && pnpm run validate:movement && pnpm run validate:touch && pnpm run validate:render && pnpm run validate:spectator && pnpm run validate:ui && pnpm run validate:ai && pnpm run validate:interactions && pnpm run validate:imposters && pnpm run validate:walls && pnpm run validate:watchability && pnpm run validate:recap && pnpm run simulate"
   },
   "dependencies": {
     "@replit/connectors-sdk": "^0.4.3",

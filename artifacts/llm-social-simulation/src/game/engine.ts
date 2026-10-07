@@ -78,6 +78,7 @@ import {
   templateLogEntry,
   type StationLogEntry,
 } from "./creative";
+import { type MatchEvent } from "./events";
 import {
   loadLegacy,
   seedGrudges,
@@ -527,6 +528,11 @@ export class GameEngine {
   private grudgesByKey: Map<string, string[]> = new Map();
   /** Every ejection this match with its voters, for the end-of-match fold. */
   private ejections: LegacyEjection[] = [];
+  /**
+   * The structured timeline of this match (kills, sabotage, meetings, ejects,
+   * the verdict). Append-only; drives the end-of-match recap. See `events.ts`.
+   */
+  events: MatchEvent[] = [];
 
   /** Ring-buffer a raw model reply for the feed, tagged with its speaker. */
   private pushRawJson(a: Actor, raw: string): void {
@@ -1130,7 +1136,18 @@ export class GameEngine {
       roomId,
     };
     this.bodies.push(body);
-    this.system(`${victim.name} was killed in ${roomAt(this.map, vx, vy).name}.`);
+    const victimRoom = roomAt(this.map, vx, vy).name;
+    this.system(`${victim.name} was killed in ${victimRoom}.`);
+    this.events.push({
+      kind: "kill",
+      t: this.time,
+      killerKey: killer.key,
+      killerName: killer.name,
+      victimKey: victim.key,
+      victimName: victim.name,
+      roomName: victimRoom,
+      witnessed: witnesses.length > 0,
+    });
 
     for (const w of witnesses) {
       remember(w.mind, {
@@ -1207,6 +1224,7 @@ export class GameEngine {
       this.system("SABOTAGE: lights out — repair the panel in Electrical.");
     }
     this.sabotageCooldown = SABOTAGE_COOLDOWN;
+    this.events.push({ kind: "sabotage", t: this.time, sabotage: chosen });
     // Station-wide alarm: every crewmate reconsiders right away instead of
     // sleeping through the first half of the countdown in its decision lull.
     for (const a of this.actors) {
@@ -1278,6 +1296,7 @@ export class GameEngine {
             ? "Sabotage repaired — lights restored."
             : "Reactor sabotage repaired — the meltdown is stopped.",
         );
+        this.events.push({ kind: "repair", t: this.time, sabotage: kind });
       }
     } else {
       this.sabotage.fixProgress = Math.max(0, this.sabotage.fixProgress - dt * 0.5);
@@ -1291,6 +1310,7 @@ export class GameEngine {
         return;
       }
       this.system("The grid stabilised on its own.");
+      this.events.push({ kind: "repair", t: this.time, sabotage: "blackout" });
     }
   }
 
@@ -2188,6 +2208,13 @@ export class GameEngine {
         ? `${by.name} called an emergency meeting.`
         : `${by.name} reported a body.`,
     );
+    this.events.push({
+      kind: "meeting",
+      t: this.time,
+      reason: reason.kind,
+      byKey: by.key,
+      byName: by.name,
+    });
   }
 
   report(byKey?: string): boolean {
@@ -2492,12 +2519,17 @@ export class GameEngine {
     // Bank the ejection with its voters. This is the raw material for next
     // shift's grudges: an innocent who was voted out blames every name on this
     // list, so the ledger can carry the grudge into a match it did not play in.
-    this.ejections.push({
+    const voters = Object.entries(m.votes)
+      .filter(([, target]) => target === ejected.key)
+      .map(([key]) => this.names[key] ?? key);
+    this.ejections.push({ name: ejected.name, role: ejected.role, voters });
+    this.events.push({
+      kind: "eject",
+      t: this.time,
+      key: ejected.key,
       name: ejected.name,
       role: ejected.role,
-      voters: Object.entries(m.votes)
-        .filter(([, target]) => target === ejected.key)
-        .map(([key]) => this.names[key] ?? key),
+      voters,
     });
     this.syncTaskBudget();
 
@@ -2575,6 +2607,7 @@ export class GameEngine {
     this.winner = winner;
     this.phase = "ended";
     this.system(reason);
+    this.events.push({ kind: "end", t: this.time, winner, reason });
     this.onMatchEnd?.(winner);
   }
 
@@ -3049,6 +3082,11 @@ export class GameEngine {
       roster: this.actors.map((a) => ({ name: a.name, role: a.role })),
       ejections: [...this.ejections],
     };
+  }
+
+  /** A copy of the structured match timeline, for the end-of-match recap. */
+  matchEvents(): MatchEvent[] {
+    return [...this.events];
   }
 
   /** Polygon for the fog layer — recomputed once per frame by the renderer. */

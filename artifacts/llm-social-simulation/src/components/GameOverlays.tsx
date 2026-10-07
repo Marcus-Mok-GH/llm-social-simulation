@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { motion } from "framer-motion";
-import { Ghost, History, Rocket, Skull, Trophy } from "lucide-react";
+import { BookOpen, ChevronDown, Ghost, History, Quote, Rocket, Skull, Trophy } from "lucide-react";
 import type { LegacyView, Snapshot } from "@/game/engine";
 import { describeMatch, type MatchRecord } from "@/game/persistence";
+import { buildRecap, type Recap, type RecapBeat } from "@/game/recap";
 import { cn } from "@/lib/utils";
 
 export interface RosterRow {
@@ -144,9 +146,118 @@ interface EndScreenProps {
   onRestart: (asImposter: boolean) => void;
 }
 
+/** Colour for a recap beat's tag, by how the beat should feel. */
+function toneClass(tone: RecapBeat["tone"]): string {
+  switch (tone) {
+    case "danger":
+      return "border-[#ff4d6a]/50 bg-[#ff4d6a]/10 text-[#ff8a9c]";
+    case "bad":
+      return "border-amber-400/50 bg-amber-400/10 text-amber-300";
+    case "good":
+      return "border-signal/50 bg-signal/10 text-signal";
+    default:
+      return "border-void-700 bg-void-950/70 text-slate-400";
+  }
+}
+
+/**
+ * "The Story of the Shift": the finished match re-told as a short narrative,
+ * collapsed by default so the stat grid still leads and the deck of the next
+ * match is one tap away. The spotlight — the single beat that decided the round
+ * — always shows; the timeline and the closing quote are behind the toggle.
+ */
+function RecapPanel({ recap }: { recap: Recap }) {
+  const [open, setOpen] = useState(false);
+  const { spotlight, quote, stats } = recap;
+
+  return (
+    <div className="mt-4 rounded-xl border border-void-700 bg-void-950/50 p-3 text-left">
+      {spotlight && (
+        <div className="rounded-lg border border-hazard/40 bg-hazard/5 px-3 py-2">
+          <p className="text-[10px] tracking-[0.25em] text-hazard">{spotlight.label}</p>
+          <p className="mt-0.5 text-[12px] leading-snug text-slate-200">{spotlight.text}</p>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="mt-2.5 flex w-full items-center justify-between rounded-lg border border-void-700 bg-void-900/60 px-3 py-2 text-[10px] tracking-[0.2em] text-slate-400 transition hover:text-slate-200"
+      >
+        <span className="flex items-center gap-2">
+          <BookOpen className="h-3 w-3" aria-hidden />
+          STORY OF THE SHIFT
+        </span>
+        <span className="flex items-center gap-3 text-slate-500">
+          <span className="hidden tabular-nums sm:inline">
+            {stats.kills} KILLS · {stats.ejects} EJECTED
+          </span>
+          <ChevronDown
+            className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")}
+            aria-hidden
+          />
+        </span>
+      </button>
+
+      {open && (
+        <div className="mt-2.5">
+          <ol className="max-h-56 space-y-2 overflow-y-auto pr-1">
+            {recap.beats.map((b, i) => (
+              <li key={`${b.t}-${i}`} className="flex gap-2.5">
+                <span className="w-9 shrink-0 pt-0.5 text-right font-mono text-[10px] tabular-nums text-slate-600">
+                  {formatBeatClock(b.t)}
+                </span>
+                <span className="min-w-0">
+                  <span
+                    className={cn(
+                      "inline-block rounded border px-1.5 py-px text-[9px] font-bold tracking-wider",
+                      toneClass(b.tone),
+                    )}
+                  >
+                    {b.headline}
+                  </span>
+                  <span className="mt-0.5 block text-[11px] leading-snug text-slate-300">
+                    {b.text}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ol>
+
+          {quote && (
+            <div className="mt-3 rounded-lg border border-void-700 bg-void-900/50 p-2.5">
+              <p className="flex items-center gap-1.5 text-[9px] tracking-[0.2em] text-slate-500">
+                <Quote className="h-2.5 w-2.5" aria-hidden />
+                {quote.concealing ? "WHAT THE LIAR REALLY THOUGHT" : "WHAT THEY REALLY THOUGHT"}
+              </p>
+              <p className="mt-1 text-[11px] italic leading-snug text-slate-300">
+                “{quote.text}”
+              </p>
+              <p className="mt-1 text-[9px] tracking-widest text-slate-500">
+                — {quote.name}
+                <span className={quote.role === "imposter" ? " text-[#ff8a9c]" : " text-signal"}>
+                  {quote.role === "imposter" ? " · IMPOSTER" : " · CREW"}
+                </span>
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatBeatClock(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 export function EndScreen({ snap, history, onRestart }: EndScreenProps) {
   const crewWon = snap.winner === "crew";
   const last = history[0];
+  const recap = last ? buildRecap(last) : null;
 
   return (
     <div className="absolute inset-0 z-30 flex items-start justify-center overflow-y-auto bg-void-950/94 px-3 py-6 sm:px-4 sm:py-8">
@@ -189,10 +300,14 @@ export function EndScreen({ snap, history, onRestart }: EndScreenProps) {
           ))}
         </div>
 
-        {last && (
-          <p className="mt-4 text-center text-[11px] tracking-widest text-slate-500">
-            {describeMatch(last)} · {last.ejects} EJECTED
-          </p>
+        {recap ? (
+          <RecapPanel recap={recap} />
+        ) : (
+          last && (
+            <p className="mt-4 text-center text-[11px] tracking-widest text-slate-500">
+              {describeMatch(last)} · {last.ejects} EJECTED
+            </p>
+          )
         )}
 
         <div className="mt-6 flex flex-wrap justify-center gap-3">

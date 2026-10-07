@@ -24,6 +24,7 @@ to trust, and **argue and vote** in meetings.
 | **Station log** | Ten consoles ask the crew to *write* a line (a scan readout, an intercept summary, a cargo note) instead of waiting out a timer. Entries are public — every agent can quote them in a meeting — and a traitor writes a cover story |
 | **Confessional** | Every decision and meeting line carries the agent's private thought, one channel underneath the public one. Sealed while you are playing (it spoils the match), legible while spectating or after the verdict |
 | **Cross-match ledger** | Wins, eliminations and grudges survive between shifts. An agent voted out blames every voter and opens the next match already watching them |
+| **Match recap** | A structured timeline of the shift (kills, sabotage, meetings, ejections, verdict) is recorded as it happens and the end screen re-tells it as a short *story of the shift* — a spotlight on the decisive beat (the mislynch, the clean kill), then the full beat sheet and the closing private thought |
 | Analyst view | Optional overlay showing each agent's current top suspect |
 | **Deck artwork** | The official Skeld art (`public/skeld-map.webp`) is the deck itself: actors, task markers and fog render on top of it |
 
@@ -154,6 +155,12 @@ POLLINATIONS_API_KEY=... pnpm --filter @workspace/llm-social-simulation run veri
   always a cover story, a grudge is capped below the threshold an agent acts on,
   and the ledger round-trips through the engine (including the end-of-match fold
   the UI performs).
+- `scripts/validate-recap.ts` — the recap layer: real matches emit an ordered,
+  well-formed timeline (kills name a killer/victim/room and whether they were
+  seen, ejections carry the true role and voters, the verdict is always last),
+  and `buildRecap` is pure — a mislynch outranks a clean kill for the spotlight,
+  the closing quote prefers a surviving liar, and the same record re-narrates
+  identically.
 - `scripts/verify-llm.ts` — exercises the real network path: every model in the
   pool in JSON mode, then two movement intents, two meeting statements (both of
   which must come back with a private `thinking` line) and two station-log
@@ -179,6 +186,12 @@ channels is the show — so it stays sealed while you are one of the players.
    on the ballot. Next match they open already watching those agents — a bias
    capped well below the threshold at which anyone acts on a suspicion, so last
    shift's drama colours the read without ever outvoting this shift's evidence.
+
+Those channels are raw material; the **recap** is the edit. Every kill, sabotage,
+meeting, ejection and verdict is banked as a structured event as it happens, and
+the end screen folds that timeline — plus the confessional — into a compact
+story with one spotlighted beat and the line the audience takes away. It is
+pure and deterministic, so a saved match re-narrates identically.
 
 ## Layout
 

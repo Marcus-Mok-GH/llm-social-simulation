@@ -57,6 +57,9 @@ function buildRecord(engine: GameEngine, winner: "crew" | "imposter"): MatchReco
       text: e.text,
       source: e.source,
     })),
+    // The structured timeline the recap reads: who killed whom, who was voted
+    // out and why, and the verdict — facts, not prose.
+    events: engine.matchEvents(),
     confessional: engine.confessional.map((c) => ({
       t: c.t,
       name: c.name,

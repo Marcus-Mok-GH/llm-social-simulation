@@ -9,6 +9,9 @@
  */
 import { renderToString } from "react-dom/server";
 import App from "../src/App";
+import { EndScreen } from "../src/components/GameOverlays";
+import type { Snapshot } from "../src/game/engine";
+import type { MatchRecord } from "../src/game/persistence";
 
 const html = renderToString(<App />);
 const checks: [string, boolean][] = [
@@ -28,10 +31,59 @@ const checks: [string, boolean][] = [
   ["offers the spoiler reveal", html.includes("REVEAL")],
   ["keeps the agent thought feed", html.includes("AGENT THOUGHTS")],
 ];
+
+// The end screen is only reachable once a match resolves, so render it directly
+// with a finished-match record. This is what proves the recap is wired into the
+// verdict screen rather than merely existing as a module.
+const record: MatchRecord = {
+  id: "test",
+  startedAt: 0,
+  endedAt: 100000,
+  durationSec: 125,
+  winner: "imposter",
+  playerRole: "crew",
+  roster: [
+    { key: "crew:0", name: "AI-1", role: "crew", alive: false },
+    { key: "crew:2", name: "AI-3", role: "crew", alive: false },
+    { key: "imp:0", name: "AI-5", role: "imposter", alive: true },
+  ],
+  meetings: 1,
+  ejects: 1,
+  tasksComplete: 3,
+  tasksTotal: 19,
+  llm: { calls: 0, fallbacks: 0 },
+  transcript: [],
+  beliefs: [],
+  events: [
+    { kind: "kill", t: 20, killerKey: "imp:0", killerName: "AI-5", victimKey: "crew:0", victimName: "AI-1", roomName: "Electrical", witnessed: false },
+    { kind: "meeting", t: 40, reason: "report", byKey: "crew:2", byName: "AI-3" },
+    { kind: "eject", t: 60, key: "crew:2", name: "AI-3", role: "crew", voters: ["AI-5"] },
+    { kind: "end", t: 120, winner: "imposter", reason: "The imposters outnumber the crew." },
+  ],
+  confessional: [
+    { t: 21, name: "AI-5", role: "imposter", action: "killed AI-1", thought: "Nobody was watching." },
+  ],
+};
+
+const endSnap = {
+  winner: "imposter",
+  role: "crew",
+  tasks: [],
+  meetings: 1,
+  ejects: 1,
+} as unknown as Snapshot;
+
+const endHtml = renderToString(
+  <EndScreen snap={endSnap} history={[record]} onRestart={() => {}} />,
+);
+checks.push(
+  ["renders the recap panel", endHtml.includes("STORY OF THE SHIFT")],
+  ["frames a misplaced vote as a mislynch", endHtml.includes("THE MISLYNCH")],
+);
 let bad = 0;
 for (const [label, ok] of checks) {
   if (!ok) bad++;
   console.log(`${ok ? "  ✓" : "  ✗"} ${label}`);
 }
-console.log(`\nrendered ${html.length} bytes of HTML`);
+console.log(`\nrendered ${html.length} bytes of HTML (+ ${endHtml.length} bytes of end screen)`);
 process.exit(bad > 0 ? 1 : 0);

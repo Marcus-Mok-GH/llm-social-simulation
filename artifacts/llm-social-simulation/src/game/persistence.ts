@@ -10,6 +10,8 @@
  * storage just make the feature a no-op rather than throwing during a match.
  */
 
+import type { MatchEvent } from "./events";
+
 export interface TranscriptLine {
   t: number;
   who: string;
@@ -45,6 +47,12 @@ export interface MatchRecord {
    * optional: matches recorded before the watchability pass do not have them.
    */
   stationLog?: { t: number; name: string; text: string; source: string }[];
+  /**
+   * The structured match timeline (kills, sabotage, meetings, ejects, verdict).
+   * Optional: matches recorded before the recap pass do not have it, and the
+   * end screen simply hides the recap for those.
+   */
+  events?: MatchEvent[];
   confessional?: {
     t: number;
     name: string;
