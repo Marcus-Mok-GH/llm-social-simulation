@@ -689,16 +689,18 @@ export class GameEngine {
     }
 
     if (playerRole === "crew") {
-      this.playerTasks = assignTasks(this.map, PLAYER_TASKS, 3);
+      this.playerTasks = assignTasks(this.map, AI_CREW);
       this.actors[0].tasks = this.playerTasks;
     }
 
-    // AI crew get an explicit list too, so the shared bar is exactly reachable
-    // and each agent has a real reason to keep walking back to a console. The
-    // slices are deliberately disjoint: agents that chase the same console end
-    // up side by side, and then nobody is ever alone enough to be killed.
-    this.actors.forEach((a, idx) => {
-      if (a.kind === "crew") a.tasks = assignTasks(this.map, TASKS_PER_CREW, idx * TASKS_PER_CREW);
+    // Every crewmate — the human included — is handed the same shape from the
+    // docs' task pools: SHORT_TASKS_PER_CREW quick tasks plus
+    // LONG_TASKS_PER_CREW long ones. The slots rotate, but with seven tasks a
+    // head the pools are necessarily shared (as they are in real Among Us), so
+    // crewmates do cross paths on the way to the same consoles.
+    let crewSlot = 0;
+    this.actors.forEach((a) => {
+      if (a.kind === "crew") a.tasks = assignTasks(this.map, crewSlot++);
     });
 
     this.taskTotal =

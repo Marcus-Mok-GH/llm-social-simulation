@@ -36,7 +36,11 @@ import {
   type LegacyMatchSummary,
 } from "../src/game/legacy";
 import { UMBRA_DECK_MAP } from "../src/game/map";
-import { TASKS_PER_CREW, assignTasks } from "../src/game/tasks";
+import {
+  LONG_TASKS_PER_CREW,
+  SHORT_TASKS_PER_CREW,
+  assignTasks,
+} from "../src/game/tasks";
 import { confessionalFallback, memoryToLine } from "../src/game/dialogue";
 import {
   MAX_GRUDGE,
@@ -75,14 +79,26 @@ check(
   "the log holds a full match without evicting its own opening",
 );
 
-// The property that makes the log fill in the opening minute of *every* match
-// rather than racing the endgame: each AI crewmate's first assigned console is
-// generative. Actor index 0 is the human, so the AI crew sit at 1..AI_CREW.
-for (let slot = 1; slot <= 4; slot++) {
-  const first = assignTasks(UMBRA_DECK_MAP, TASKS_PER_CREW, slot * TASKS_PER_CREW)[0];
+// Every crewmate's list is the docs' shape — five short tasks plus two long
+// ones — and the property that makes the log fill in the opening minute of
+// *every* match rather than racing the endgame: each AI crewmate's first
+// assigned console is generative. The AI crew sit at slots 0..AI_CREW-1.
+for (let slot = 0; slot < 4; slot++) {
+  const list = assignTasks(UMBRA_DECK_MAP, slot);
+  const quick = list.filter((t) => t.length !== "long").length;
+  const long = list.filter((t) => t.length === "long").length;
   check(
-    isLogConsole(first.poiId),
-    `AI crewmate ${slot} opens on a generative console (${first.poiId})`,
+    quick === SHORT_TASKS_PER_CREW && long === LONG_TASKS_PER_CREW,
+    `AI crewmate ${slot} gets ${SHORT_TASKS_PER_CREW} short + ${LONG_TASKS_PER_CREW} long ` +
+      `(got ${quick} short, ${long} long)`,
+  );
+  check(
+    new Set(list.map((t) => t.poiId)).size === list.length,
+    `AI crewmate ${slot} has no duplicate console`,
+  );
+  check(
+    isLogConsole(list[0].poiId),
+    `AI crewmate ${slot} opens on a generative console (${list[0].poiId})`,
   );
 }
 

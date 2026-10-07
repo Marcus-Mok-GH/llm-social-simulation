@@ -13,7 +13,7 @@ to trust, and **argue and vote** in meetings.
 | Map & renderer | The official Skeld artwork as the deck, Canvas 2D, player-following camera at fixed zoom, A\* navigation grid |
 | **Vision fog** | Ray-cast visibility polygon + persistent "explored" memory, with wall occlusion |
 | Player | WASD movement, wall collision, contextual actions, spectator mode when dead |
-| **Tasks** | Per-agent task lists, shared station bar, two playable minigames (wiring, calibration) |
+| **Tasks** | Per-agent task lists built to the Among Us docs' job sizes (5 short + 2 long per crewmate), shared station bar, two playable minigames (wiring, calibration) |
 | **Interactions** | Agents choose `INTERACT` (`TASK`/`KILL`/`FIX`/`REPORT`/`EMERGENCY`) against objects in their current node; the engine re-checks distance, game state and line of sight, rejects illegal actions and feeds the reason back as `system_message` |
 | **Kills & bodies** | Kill is a validated interaction with a real witness check (line of sight within 230u), corpses, reporting |
 | **Sabotage** | Reactor meltdown (30s, The Skeld's length — both Reactor hand scanners must be held at once by two people; the beacon locks out until it is fixed or a body is reported) and lights out (halves every agent's vision — repaired in Electrical) |
