@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Hand, Megaphone, Skull, Zap } from "lucide-react";
-import type { GameEngine, Snapshot } from "@/game/engine";
+import type { Snapshot } from "@/game/engine";
+import type { GameLink } from "@/game/link";
 import { cn } from "@/lib/utils";
 
 interface TouchControlsProps {
-  engine: GameEngine;
+  link: GameLink;
   snap: Snapshot;
   /** Push a fresh snapshot into React after a button changes engine state. */
   onAction: () => void;
@@ -15,10 +16,10 @@ const KNOB_TRAVEL = 0.62;
 const DEADZONE = 0.24;
 
 /**
- * Virtual analog stick. Drives `engine.touchMove`, which the engine prefers
+ * Virtual analog stick. Drives `link.touchMove`, which the engine prefers
  * whenever no movement key is held, so keyboard and touch can coexist.
  */
-function Joystick({ engine }: { engine: GameEngine }) {
+function Joystick({ link }: { link: GameLink }) {
   const padRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const [knob, setKnob] = useState({ x: 0, y: 0 });
@@ -27,9 +28,9 @@ function Joystick({ engine }: { engine: GameEngine }) {
   // A match can restart or an overlay can unmount us mid-drag.
   useEffect(
     () => () => {
-      engine.touchMove = null;
+      link.touchMove = null;
     },
-    [engine],
+    [link],
   );
 
   const apply = (clientX: number, clientY: number) => {
@@ -45,18 +46,18 @@ function Joystick({ engine }: { engine: GameEngine }) {
       dy /= mag;
     }
     if (Math.hypot(dx, dy) < DEADZONE) {
-      engine.touchMove = null;
+      link.touchMove = null;
       setKnob({ x: 0, y: 0 });
       return;
     }
-    engine.touchMove = { x: dx, y: dy };
+    link.touchMove = { x: dx, y: dy };
     setKnob({ x: dx * radius * KNOB_TRAVEL, y: dy * radius * KNOB_TRAVEL });
   };
 
   const release = () => {
     dragging.current = false;
     setActive(false);
-    engine.touchMove = null;
+    link.touchMove = null;
     setKnob({ x: 0, y: 0 });
   };
 
@@ -159,29 +160,29 @@ function ActionButton({
  * action buttons bottom-right (interact/report for crew, plus kill/sabotage
  * for the imposter). Rendered by GameStage only on compact layouts.
  */
-export function TouchControls({ engine, snap, onAction }: TouchControlsProps) {
+export function TouchControls({ link, snap, onAction }: TouchControlsProps) {
   const isImposter = snap.role === "imposter";
 
   // These controls unmount whenever a task or meeting takes over the screen, so
   // never leave a key latched behind them.
   useEffect(
     () => () => {
-      engine.setKey("e", false);
-      engine.touchMove = null;
+      link.setKey("e", false);
+      link.touchMove = null;
     },
-    [engine],
+    [link],
   );
 
   // "E" must stay held while repairing a sabotage, exactly like the key does —
   // but only when the press did not open a modal, because that unmounts this
   // component before pointer-up could release the key.
   const pressInteract = () => {
-    engine.interact();
-    if (!engine.activeTask && !engine.meeting) engine.setKey("e", true);
+    link.interact();
+    if (!link.taskOpen && !link.meetingOpen) link.setKey("e", true);
     onAction();
   };
   const releaseInteract = () => {
-    engine.setKey("e", false);
+    link.setKey("e", false);
     onAction();
   };
 
@@ -190,7 +191,7 @@ export function TouchControls({ engine, snap, onAction }: TouchControlsProps) {
       className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-end justify-between gap-3 p-3"
       style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom, 0px))" }}
     >
-      <Joystick engine={engine} />
+      <Joystick link={link} />
 
       <div className="grid grid-cols-2 gap-2">
         <ActionButton
@@ -206,7 +207,7 @@ export function TouchControls({ engine, snap, onAction }: TouchControlsProps) {
         <ActionButton
           label="Report"
           onDown={() => {
-            engine.report();
+            link.report();
             onAction();
           }}
           className={cn(
@@ -224,7 +225,7 @@ export function TouchControls({ engine, snap, onAction }: TouchControlsProps) {
               label="Kill"
               disabled={snap.killCooldown > 0}
               onDown={() => {
-                engine.playerKill();
+                link.kill();
                 onAction();
               }}
               className="h-11 border-[#ff4d6a]/60 bg-[#ff4d6a]/15 text-[#ff8a9c]"
@@ -236,7 +237,7 @@ export function TouchControls({ engine, snap, onAction }: TouchControlsProps) {
               label="Sabotage"
               disabled={Boolean(snap.sabotage) || snap.sabotageCooldown > 0}
               onDown={() => {
-                engine.triggerSabotage();
+                link.sabotage();
                 onAction();
               }}
               className="col-span-2 h-11 border-hazard/50 bg-hazard/10 text-hazard"

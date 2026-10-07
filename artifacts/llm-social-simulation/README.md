@@ -21,7 +21,8 @@ to trust, and **argue and vote** in meetings.
 | **Belief model** | Per-agent complete match log (every event, sighting, decision and meeting, from start to finish) + suspicion vector with decay, vent sightings, body-room inference |
 | **LLM decision loop** | A configurable OpenAI-compatible provider (Pollinations or Berget) returns validated JSON intents (`MOVE`/`INTERACT`/`VENT`/`SABOTAGE`) and meeting lines; each AI agent runs a **different** model from a cheap-model pool, with heuristic fallback on any failure |
 | **Deception & identification** | Every traitor is handed a persona (wire-puller / provocateur / confidant / ghost) and lies in meetings with structured claims — `accuse`, `vouch`, `alibi`. Every listener weighs a claim against its own memory: an unverifiable smear only shades suspicion, but a claim its own eyes contradict brands the speaker a liar (`caught`) — the crew's way of identifying imposters |
-| **Persistence** | Finished matches, transcripts and every agent's suspicion snapshot saved to `localStorage` |
+| **Autonomous station host** | The match runs server-side in the preview process: it starts on its own, keeps ticking with the tab closed (an AFK pilot flies the human body), folds every shift into the cross-match ledger and chains the next one — the browser is a viewer that can close and rejoin |
+| **Persistence** | Finished matches, transcripts and every agent's suspicion snapshot saved to `localStorage` in local mode, and to the shared server-side history when the shift runs on the host |
 | **Station log** | Ten consoles ask the crew to *write* a line (a scan readout, an intercept summary, a cargo note) instead of waiting out a timer. Entries are public — every agent can quote them in a meeting — and a traitor writes a cover story |
 | **Confessional** | Every decision and meeting line carries the agent's private thought, one channel underneath the public one. Sealed while you are playing (it spoils the match), legible while spectating or after the verdict |
 | **Cross-match ledger** | Wins, eliminations and grudges survive between shifts. An agent voted out blames every voter and opens the next match already watching them |
@@ -54,18 +55,60 @@ rest of the art — is original.
 
 ```bash
 pnpm install                                   # from the workspace root
-pnpm --filter @workspace/llm-social-simulation run dev
+pnpm dev                                       # the station host (what the preview runs)
+pnpm dev:vite                                  # plain Vite, client-only (no hosted match)
 ```
+
+`pnpm dev` starts **the station host**: a single Node/Bun process that serves
+the app through Vite's dev middleware (HMR included) *and* runs the match on
+the same port. It is the same command the Freebuff preview runs.
 
 The Vite config requires `PORT` and `BASE_PATH` (the Replit artifact supplies
 them). For a local run:
 
 ```bash
-PORT=5173 BASE_PATH=/ pnpm --filter @workspace/llm-social-simulation run dev
+PORT=5173 BASE_PATH=/ pnpm dev
 ```
 
 Production build: `pnpm --filter @workspace/llm-social-simulation run build`
 (`dist/public`).
+
+## The match runs on the station — close the tab, it keeps playing
+
+The engine has no wall clock: it only advances through `tick(dt)`. The station
+host exploits that — it owns the `GameEngine`, ticks it on a timer, and serves
+the browser as a **viewer**:
+
+- **Autonomous from the first second.** A fresh shift briefs itself, begins
+  after a few seconds whether or not anyone pressed BEGIN, plays to a verdict,
+  writes the record, folds the outcome into the ledger, and builds the next
+  shift. Nothing waits for a client.
+- **Closing the tab only pauses the viewer.** State flows server → browser as
+  SSE frames (`hello` on attach, then `state` at 10 Hz, interpolated to smooth
+  motion) and input flows back as small POSTs on `/__umbra/*`. No WebSocket
+  upgrade, so it survives the preview proxy; `EventSource` retries on its own.
+- **Rejoin takes your seat back.** The player seat is claimed by a session id
+  stored in `localStorage`. The same browser reconnecting to a live shift gets
+  `hello` with the same `matchId`, the same body, and whatever minute the
+  match has reached while you were away. A different browser only watches.
+- **The human body flies itself while you are gone.** With the seat free, an
+  AFK pilot drives the player through the same public surface a human uses
+  (`touchMove`, `setKey`, `interact`, `report`, `playerKill`, `playerVote`) and
+  is bound by the same engine referee — it walks A* routes, holds `e` on a
+  repair panel, works its assigned consoles, reports bodies it reaches, votes
+  its suspicion, and as an impostor closes on the most isolated crew member.
+- **The learning is server-side.** Every shift — watched or not — folds into
+  `.data/ledger.json` (grudges, wins, eliminations) and `.data/matches.json`
+  (the shared history), both re-read on host start, so the agents open the
+  next match remembering the last one even across a restart.
+- **Nothing hosted? Nothing lost.** If no host answers within five seconds
+  (e.g. a static build), the page falls back to the original in-page engine
+  and plays exactly as before — just without cross-tab persistence.
+
+`scripts/validate-host.ts` boots the real thing headlessly and asserts all of
+it: ticking with zero viewers, seat reclaim on rejoin, gallery-only second
+viewers, whole matches run without a client, and ledger/history surviving a
+fresh host process.
 
 ## Model configuration
 
@@ -131,7 +174,9 @@ The three systems that make a match worth *watching* rather than merely reading
   intent already returns and the `thinking` field the meeting call already
   answers with, and is synthesised from the agent's own beliefs when running on
   the heuristic;
-- the ledger is pure `localStorage` — no model is ever consulted about a grudge.
+- the ledger is pure storage — no model is ever consulted about a grudge. It
+  lives in `localStorage` for browser-local shifts and in `.data/ledger.json`
+  for shifts the station host runs.
 
 > **Deployment note:** this is a client-only app, so the key is inlined into the
 > production bundle. Anyone who can load the page can read it. Put it behind a
@@ -144,6 +189,14 @@ pnpm --filter @workspace/llm-social-simulation run check       # typecheck + all
 pnpm --filter @workspace/llm-social-simulation run simulate    # full matches, 60 Hz, no network
 POLLINATIONS_API_KEY=... pnpm --filter @workspace/llm-social-simulation run verify:llm
 ```
+
+- `scripts/validate-host.ts` — boots the real station (HTTP + SSE + engine)
+  on an ephemeral port and proves the host's promises: the shift keeps
+  ticking with zero viewers, a viewer that reconnects with the same session
+  id gets its crew seat back on the *same* shift at a later match time, a
+  second viewer only watches, whole matches run headlessly to a verdict, and
+  the ledger + history survive a fresh host process reading the same `.data`
+  directory.
 
 - `scripts/validate-*.ts` — map data, collision, renderer draw calls (including
   the deck artwork, fog layer and analyst view), the React tree rendered to a
@@ -237,9 +290,15 @@ src/
             claims, lie-catching), persistence.ts, map.ts,
             collision.ts, navigation.ts, crewmate.ts, imposter.ts, player.ts, rng.ts
             creative.ts (generative log consoles), legacy.ts (cross-match ledger)
-            render/renderMap.ts
+            link.ts (the GameLink seam: local engine vs hosted match),
+            remoteLink.ts (SSE client with rejoin + interpolation),
+            record.ts (finished-match record), render/renderMap.ts
+  host/     main.ts (HTTP + Vite middleware + SSE entrypoint), matchHost.ts
+            (autonomous loop, seats, broadcast), afkPilot.ts (plays the human
+            body while nobody watches), protocol.ts (wire messages),
+            store.ts (server-side ledger + history files)
   components/ GameStage.tsx, GameHud.tsx, MeetingOverlay.tsx, TaskModal.tsx,
-            GameOverlays.tsx, StationLog.tsx, Confessional.tsx, ThoughtFeed.tsx
+            GameOverlays.tsx, Confessional.tsx, TouchControls.tsx
 scripts/    validate-*.ts, simulate.ts, verify-llm.ts
 ```
 

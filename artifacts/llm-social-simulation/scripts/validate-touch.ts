@@ -12,6 +12,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { GameEngine } from "../src/game/engine";
 import { TouchControls } from "../src/components/TouchControls";
+import { LocalGameLink } from "../src/game/link";
 
 let bad = 0;
 const check = (label: string, ok: boolean, detail = "") => {
@@ -120,12 +121,12 @@ check(
 
 // 6. the thumb controls show the right actions for the player's role
 const render = (playerIsImposter: boolean) => {
-  const engine = new GameEngine({ playerIsImposter, llm: false });
-  engine.begin();
+  const link = new LocalGameLink({ playerIsImposter });
+  link.begin();
   return renderToString(
     createElement(TouchControls, {
-      engine,
-      snap: engine.snapshot(),
+      link,
+      snap: link.snapshot(),
       onAction: () => {},
     }),
   );

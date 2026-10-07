@@ -454,6 +454,12 @@ export interface EngineOptions {
   llm?: boolean;
   /** Skip the cross-match ledger (tests, replays, deterministic replays). */
   legacy?: boolean;
+  /**
+   * Bring a ledger with you instead of reading `localStorage`. The match host
+   * uses this so every autonomous shift folds into one server-side ledger that
+   * survives restarts, while browser-local runs keep reading storage as before.
+   */
+  legacyLedger?: LegacyLedger;
 }
 
 /** What the UI needs to show who has history with whom. */
@@ -598,7 +604,9 @@ export class GameEngine {
     // shift already carrying last shift's grudges. Headless runs (no storage)
     // simply get an empty ledger and the seeding becomes a no-op.
     this.legacyEnabled = opts.legacy ?? true;
-    this.legacy = this.legacyEnabled ? loadLegacy() : null;
+    this.legacy = this.legacyEnabled
+      ? (opts.legacyLedger ?? loadLegacy())
+      : null;
 
     this.buildRoster(opts.playerIsImposter ?? false);
   }

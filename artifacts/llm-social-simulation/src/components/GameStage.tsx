@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { UMBRA_DECK_MAP } from "@/game/map";
 import { isMovementKey } from "@/game/input";
-import { GameEngine, type Snapshot } from "@/game/engine";
-import { foldMatch, loadLegacy, saveLegacy } from "@/game/legacy";
-import { rankSuspects } from "@/game/perception";
-import { saveMatch, type MatchRecord } from "@/game/persistence";
+import type { Snapshot } from "@/game/engine";
+import {
+  LocalGameLink,
+  type GameLink,
+  type LinkStatus,
+} from "@/game/link";
+import { RemoteGameLink } from "@/game/remoteLink";
+import type { MatchRecord } from "@/game/persistence";
 import { drawMap } from "@/game/render/renderMap";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Confessional } from "./Confessional";
@@ -29,93 +33,78 @@ interface GameStageProps {
   onHistoryChange?: (matches: MatchRecord[]) => void;
 }
 
-function buildRecord(engine: GameEngine, winner: "crew" | "imposter"): MatchRecord {
-  return {
-    id: `${winner}-${Date.now()}`,
-    startedAt: engine.startedAt,
-    endedAt: Date.now(),
-    durationSec: Math.round(engine.time),
-    winner,
-    playerRole: engine.playerActor.role,
-    roster: engine.actors.map((a) => ({
-      key: a.key,
-      name: a.name,
-      role: a.role,
-      alive: a.alive,
-    })),
-    meetings: engine.meetingsHeld,
-    ejects: engine.ejects,
-    tasksComplete: engine.taskComplete,
-    tasksTotal: engine.taskTotal,
-    llm: { calls: engine.llmCalls, fallbacks: engine.llmFallbacks },
-    transcript: engine.messages.map((m) => ({ t: m.t, who: m.speakerName, text: m.text })),
-    stationLog: engine.stationLog.map((e) => ({
-      t: e.t,
-      name: e.name,
-      text: e.text,
-      source: e.source,
-    })),
-    // The structured timeline the recap reads: who killed whom, who was voted
-    // out and why, and the verdict — facts, not prose.
-    events: engine.matchEvents(),
-    confessional: engine.confessional.map((c) => ({
-      t: c.t,
-      name: c.name,
-      role: c.role,
-      action: c.action,
-      thought: c.thought,
-    })),
-    beliefs: engine.actors.map((a) => ({
-      key: a.key,
-      name: a.name,
-      role: a.role,
-      suspects: rankSuspects(a.mind, 0)
-        .slice(0, 3)
-        .map((s) => ({
-          name: engine.names[s.key] ?? s.key,
-          score: Number(s.score.toFixed(3)),
-        })),
-      observations: a.mind.memories.length,
-    })),
-  };
-}
-
 /**
- * Hosts the canvas, the engine loop and every overlay. The engine is the only
- * source of truth; React renders a 10 Hz snapshot of it, which keeps the
- * simulation at full frame rate while the UI stays cheap.
+ * Hosts the canvas, the match link and every overlay.
+ *
+ * The stage never touches a `GameEngine` itself: it drives a `GameLink`,
+ * which is either the in-page engine (offline fallback and the synchronous
+ * first render) or `RemoteGameLink`, the autonomous station host. React
+ * renders a 10 Hz snapshot either way, and the canvas draws one interpolated
+ * frame per rAF — so a hosted match watched over SSE looks identical to a
+ * local one, and closing the tab merely pauses the viewer, not the match.
  */
 export function GameStage({ className, history, onHistoryChange }: GameStageProps) {
-  const [engine, setEngine] = useState(() => new GameEngine());
-  const [snap, setSnap] = useState<Snapshot>(() => engine.snapshot());
+  const [link, setLink] = useState<GameLink>(() => new LocalGameLink());
+  const [snap, setSnap] = useState<Snapshot>(() => link.snapshot());
   const [analyst, setAnalyst] = useState(false);
   /** Manual override for the confessional gate; see `Confessional`. */
   const [confessionalOpen, setConfessionalOpen] = useState(false);
+  /** Uplink state: connecting → live (hosted) or offline (local fallback). */
+  const [conn, setConn] = useState<LinkStatus>("local");
+  /** True once a hosted match has been adopted, to phrase the offline badge. */
+  const [hosted, setHosted] = useState(false);
   const isMobile = useIsMobile();
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bgRef = useRef<HTMLImageElement | null>(null);
 
-  const roster: RosterRow[] = useMemo(
-    () =>
-      engine.actors.map((a) => ({
-        key: a.key,
-        name: a.name,
-        color: a.color,
-        isPlayer: a.isPlayer,
-        role: a.role,
-        model: a.cfg?.model ?? null,
-      })),
-    [engine],
-  );
+  // Keep the newest history callback without re-dialling the host for it.
+  const historyRef = useRef(onHistoryChange);
+  historyRef.current = onHistoryChange;
 
-  const sync = useCallback(() => setSnap(engine.snapshot()), [engine]);
+  const roster: RosterRow[] = useMemo(() => link.roster(), [link, snap.phase]);
+
+  const sync = useCallback(() => setSnap(link.snapshot()), [link]);
 
   // The confessional is a spoiler by construction — a traitor is candid in it
   // and the crew never hears it. So it is only legible once you are no longer
   // one of the players: while spectating, after the verdict, or if you ask.
   const confessionalReveal =
     snap.spectator || snap.phase === "ended" || confessionalOpen;
+
+  // --- the uplink ----------------------------------------------------------
+  // Dial the station host on mount. While it answers, the match runs there:
+  // it keeps ticking with the tab closed, and reconnecting re-attaches to the
+  // same shift (the session id in localStorage is what claims the seat back).
+  // No host within five seconds — a static build — and the local engine from
+  // the first render simply keeps playing.
+  useEffect(() => {
+    const remote = new RemoteGameLink();
+    remote.handlers = {
+      onHistory: (records) => historyRef.current?.(records),
+    };
+    remote.onStatus = (status) => {
+      setConn(status);
+      if (status === "live") {
+        setHosted(true);
+        setLink((current) => (current.mode === "remote" ? current : remote));
+      }
+    };
+    remote.connect();
+    return () => {
+      remote.onStatus = null;
+      remote.dispose();
+    };
+  }, []);
+
+  // Hand whichever link is current the stage's history callback, so a
+  // finished match (local save or server push) lands in the App's list.
+  useEffect(() => {
+    link.handlers = { onHistory: onHistoryChange };
+    return () => {
+      link.handlers = {};
+    };
+  }, [link, onHistoryChange]);
 
   // --- render + simulation loop ------------------------------------------
   useEffect(() => {
@@ -191,46 +180,17 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
     // the viewport, so listen for those directly.
     window.addEventListener("resize", resize);
 
-    engine.onMatchEnd = (winner) => {
-      const record = buildRecord(engine, winner);
-      onHistoryChange?.(saveMatch(record));
-      // Carry this shift into the ledger the next one reads: wins, eliminations
-      // and — the interesting part — the grudges an innocent takes away from
-      // everyone who voted them out.
-      const summary = engine.legacySummary();
-      if (summary) saveLegacy(foldMatch(loadLegacy(), summary));
-    };
-
     let raf = 0;
-    let last = performance.now();
-
     const frame = (now: number) => {
-      const dt = Math.min((now - last) / 1000, 0.05);
-      last = now;
-      engine.tick(dt);
-
-      const alive = new Set(engine.actors.filter((a) => a.alive).map((a) => a.entity));
+      // One call advances the view (a local link ticks its engine here; the
+      // remote link interpolates the latest server frames) and returns what
+      // to draw.
+      const scene = link.frame(now);
       drawMap(ctx, UMBRA_DECK_MAP, cssW, cssH, dpr, {
         biasY,
         background: bg.complete && bg.naturalWidth > 0 ? bg : null,
-        // The camera follows the human player at a fixed zoom, re-read every
-        // frame so it tracks movement and clamps at the deck edges. A
-        // spectator watches the station itself: no camera target, no avatar,
-        // and the fog gate below lifts so the whole deck (and everyone on it)
-        // is visible.
-        camera: engine.spectator ? null : { x: engine.player.x, y: engine.player.y },
-        player: engine.spectator ? null : engine.player,
-        playerAlive: engine.playerActor.alive,
-        crewmates: engine.crewmates.filter((c) => alive.has(c)),
-        imposters: engine.imposters.filter((i) => alive.has(i)),
-        bodies: engine.bodies,
-        fog:
-          engine.phase === "playing" && !engine.spectator
-            ? { polygon: engine.visionPolygon(), grid: engine.vis }
-            : null,
-        revealRoles: engine.analystView,
+        ...scene,
       });
-
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
@@ -242,10 +202,9 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
       window.clearInterval(uiTimer);
       window.removeEventListener("resize", resize);
       observer.disconnect();
-      engine.onMatchEnd = null;
       bgRef.current = null;
     };
-  }, [engine, sync, onHistoryChange]);
+  }, [link, sync]);
 
   // --- keyboard ------------------------------------------------------------
   useEffect(() => {
@@ -262,31 +221,28 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
         // Hand back to the keyboard: drop the stick so a released thumb can't
         // resume driving the player once the key comes up. Only movement keys
         // do this — pressing `e` or Shift must not stop a held joystick.
-        engine.touchMove = null;
-        engine.setKey(key, true);
+        link.touchMove = null;
+        link.setKey(key, true);
         e.preventDefault();
         return;
       }
       if (key === "e") {
-        engine.setKey("e", true);
-        if (!e.repeat) engine.interact();
+        link.setKey("e", true);
+        if (!e.repeat) link.interact();
         return;
       }
       if (key === " ") {
-        engine.setKey(" ", true);
-        if (!e.repeat) engine.playerKill();
+        link.setKey(" ", true);
+        if (!e.repeat) link.kill();
         e.preventDefault();
         return;
       }
-      if (key === "r" && !e.repeat) engine.report();
-      if (key === "q" && !e.repeat) engine.triggerSabotage();
+      if (key === "r" && !e.repeat) link.report();
+      if (key === "q" && !e.repeat) link.sabotage();
     };
 
-    const onKeyUp = (e: KeyboardEvent) => engine.setKey(e.key.toLowerCase(), false);
-    const onBlur = () => {
-      for (const k of [...engine.keys]) engine.setKey(k, false);
-      engine.touchMove = null;
-    };
+    const onKeyUp = (e: KeyboardEvent) => link.setKey(e.key.toLowerCase(), false);
+    const onBlur = () => link.clearKeys();
 
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
@@ -296,17 +252,31 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [engine]);
+  }, [link]);
 
   const restart = (asImposter: boolean) => {
-    // A fresh engine re-reads the ledger, so the grudges this match just banked
-    // are already in the next roster's heads.
-    const next = new GameEngine({ playerIsImposter: asImposter });
-    setEngine(next);
-    setSnap(next.snapshot());
-    setAnalyst(false);
+    // Local: a fresh engine re-reads the ledger, so the grudges this match
+    // just banked are already in the next roster's heads. Remote: the host
+    // builds the next shift server-side (with the role just asked for) and
+    // the next state frame shows its briefing.
+    link.restart(asImposter);
+    setSnap(link.snapshot());
+    setAnalyst(link.analyst);
     setConfessionalOpen(false);
   };
+
+  const uplink =
+    conn === "live"
+      ? hosted
+        ? "STATION LIVE — the shift keeps running while your tab is closed"
+        : "CONNECTED"
+      : conn === "connecting"
+        ? "DIALING THE STATION…"
+        : conn === "offline"
+          ? hosted
+            ? "UPLINK LOST — retrying…"
+            : "HOST OFFLINE — playing this shift locally (no rejoin)"
+          : null;
 
   return (
     <div className={cn(className)}>
@@ -324,18 +294,29 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
               />
             </div>
 
+            {/* First paint races the host: veil the stage until the uplink
+                answers (or falls back) so a local roster never flashes over a
+                hosted mid-shift join. */}
+            {conn === "connecting" && (
+              <div className="absolute inset-x-0 top-0 z-30 flex justify-center rounded-t-xl bg-void-950/70 py-2">
+                <span className="font-display text-[10px] tracking-[0.3em] text-slate-500">
+                  ESTABLISHING UPLINK…
+                </span>
+              </div>
+            )}
+
             <GameHud
               snap={snap}
               compact={isMobile}
               analyst={analyst}
               onToggleAnalyst={() => {
-                engine.analystView = !engine.analystView;
-                setAnalyst(engine.analystView);
+                link.analyst = !link.analyst;
+                setAnalyst(link.analyst);
                 sync();
               }}
               spectator={snap.spectator}
               onToggleSpectate={() => {
-                engine.enterSpectator();
+                link.enterSpectator();
                 sync();
               }}
             />
@@ -352,7 +333,7 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
           snap.phase === "playing" &&
           !snap.spectator &&
           !snap.meeting &&
-          !snap.activeTask && <TouchControls engine={engine} snap={snap} onAction={sync} />}
+          !snap.activeTask && <TouchControls link={link} snap={snap} onAction={sync} />}
 
         {snap.phase === "briefing" && (
           <Briefing
@@ -361,11 +342,11 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
             legacy={snap.legacy}
             compact={isMobile}
             onStart={() => {
-              engine.begin();
+              link.begin();
               sync();
             }}
             onSpectate={() => {
-              engine.begin(true);
+              link.begin(true);
               sync();
             }}
           />
@@ -376,15 +357,15 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
             meeting={snap.meeting}
             spectator={snap.spectator}
             onSay={(text) => {
-              engine.playerSay(text);
+              link.say(text);
               sync();
             }}
             onVote={(key) => {
-              engine.playerVote(key);
+              link.vote(key);
               sync();
             }}
             onAdvance={() => {
-              engine.advanceMeeting();
+              link.advanceMeeting();
               sync();
             }}
           />
@@ -396,11 +377,11 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
             room={snap.activeTask.room}
             kind={snap.activeTask.kind}
             onComplete={() => {
-              engine.completeActiveTask();
+              link.completeTask();
               sync();
             }}
             onFail={() => {
-              engine.cancelActiveTask();
+              link.failTask();
               sync();
             }}
           />
@@ -410,6 +391,28 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
           <EndScreen snap={snap} history={history ?? []} onRestart={restart} />
         )}
       </div>
+
+      {/* One line about where the match is running — the whole reason a
+          closed tab is safe. Seeded viewers also see when someone else holds
+          the crew seat. */}
+      {(uplink || (link.seat === "spectator" && !snap.spectator)) && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] tracking-[0.2em] text-slate-500">
+          {uplink && (
+            <span className={cn(conn === "live" ? "text-signal" : "text-slate-500")}>
+              <span
+                className={cn(
+                  "mr-2 inline-block h-1.5 w-1.5 rounded-full align-middle",
+                  conn === "live" ? "bg-signal" : "bg-slate-600",
+                )}
+              />
+              {uplink}
+            </span>
+          )}
+          {link.seat === "spectator" && !snap.spectator && (
+            <span>ANOTHER VIEWER HOLDS THE CREW SEAT — YOU ARE WATCHING</span>
+          )}
+        </div>
+      )}
 
       {/* The confessional read-out lives in normal flow below the deck (and
           below the meeting/end overlays), so it never fights the HUD for map

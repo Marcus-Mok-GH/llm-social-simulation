@@ -8,11 +8,16 @@ LLM-driven social simulation rather than scripted state machines.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/llm-social-simulation run dev` — dev server (needs `PORT` and `BASE_PATH`)
+- `pnpm dev` — **the station host** (what the Freebuff preview runs): one
+  process that serves the app via Vite middleware (HMR included) *and* runs the
+  match server-side over SSE on the same port. Needs `PORT` and `BASE_PATH`
+  (the preview injects them; both fall back for local runs).
+- `pnpm dev:vite` — plain Vite, client-only (no hosted match).
 - `pnpm --filter @workspace/llm-social-simulation run build` — production build to `artifacts/llm-social-simulation/dist/public`
 - `pnpm --filter @workspace/llm-social-simulation run typecheck` — app typecheck
 - `pnpm --filter @workspace/llm-social-simulation run check` — typecheck + all headless validators
 - `pnpm --filter @workspace/llm-social-simulation run simulate` — headless full-match replays (no network)
+- `pnpm --filter @workspace/llm-social-simulation run validate:host` — boots the real station headlessly: seat rejoin, autonomous ticking, ledger/history persistence
 - `pnpm --filter @workspace/llm-social-simulation run verify:llm` — live model check (needs a key)
 - `pnpm run typecheck` — full workspace typecheck
 
@@ -30,7 +35,10 @@ Environment:
 - React 19 + Vite 7, Tailwind 3, framer-motion, lucide-react
 - HTML5 Canvas 2D rendering, A\* pathfinding over a derived grid
 - Berget AI (OpenAI-compatible chat completions) for agent reasoning
-- `localStorage` for match history; Convex schema stub is present but unused
+- A self-hosted station server (Bun + `node:http` + SSE, Vite in middleware
+  mode) that runs the match autonomously so a closed tab never ends it
+- `localStorage` for browser-local match history; the host keeps the shared
+  ledger + history in `.data/*.json`; Convex schema stub is present but unused
 
 ## Where things live
 
@@ -56,8 +64,19 @@ Environment:
 - `src/game/recap.ts` — pure `buildRecap`: turns that timeline plus the
   confessional into the end screen's "story of the shift" (beats, spotlight,
   closing quote). No engine, no clock, so it re-narrates identically.
-- `src/components/GameStage.tsx` — canvas + engine loop + overlays; everything else is presentation.
+- `src/game/link.ts` / `src/game/remoteLink.ts` — the `GameLink` seam the
+  stage drives: `LocalGameLink` wraps an in-page engine (offline fallback and
+  synchronous first render), `RemoteGameLink` proxies the same surface to the
+  station host over SSE with rejoin + interpolation.
+- `src/host/` — the autonomous station: `main.ts` (HTTP + Vite middleware +
+  SSE), `matchHost.ts` (engine loop, player seat, broadcast, records, ledger
+  fold), `afkPilot.ts` (plays the human body while the seat is free),
+  `store.ts` (`.data/ledger.json` + `.data/matches.json`), `protocol.ts`.
+- `src/components/GameStage.tsx` — canvas + link loop + overlays; everything else is presentation.
 - `scripts/simulate.ts` — the behavioural test that actually proves the game loop works.
+- `scripts/validate-host.ts` — proves the host promises: the match ticks with
+  zero viewers, a rejoining session gets its seat back on the same shift, and
+  the ledger/history survive a fresh host process.
 
 ## Architecture decisions
 
@@ -76,6 +95,13 @@ Environment:
 - **Every model call has a validated shape and a fallback.** A timeout, a rate
   limit, malformed JSON or an unsupported action all fall through to the
   heuristic, so the game never stalls waiting for a model.
+- **The match lives on the server, not in the tab.** The host owns the engine
+  and ticks it whether or not anyone watches; the browser is an SSE viewer
+  whose input rides back as POSTs. Closing the tab frees the player seat (the
+  AFK pilot takes the body), and the same session reconnecting reclaims it on
+  the same shift — which is also why cross-match learning moved server-side
+  into `.data/`, where every shift folds into the ledger whether or not
+  anyone saw it end.
 - **The Skeld, credited.** The deck is The Skeld from Among Us (© Innersloth),
   ported as data in `src/game/map.ts` — 15 locations (14 rooms + Hallway), 7
   corridors as hubs, 14 vent grates in six chains, Reactor hand scanners and the

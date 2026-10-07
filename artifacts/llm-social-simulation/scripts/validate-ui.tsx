@@ -23,13 +23,13 @@ const checks: [string, boolean][] = [
   ["renders the per-agent model line", html.includes("different model")],
   ["renders the map legend", html.includes("Task console")],
   ["has a canvas", html.includes("<canvas")],
-  // The three watchability read-outs sit below the deck on every screen.
-  ["renders the station log", html.includes("STATION LOG")],
+  // The watchability read-out below the deck: the confessional. (The station
+  // log and agent-thought panels were removed in 72101a9; their data still
+  // ships in every record — only the always-visible panels went.)
   ["renders the confessional", html.includes("CONFESSIONAL")],
   // …and the confessional is sealed at first, because it spoils the match.
   ["seals the confessional until asked", html.includes("SEALED")],
   ["offers the spoiler reveal", html.includes("REVEAL")],
-  ["keeps the agent thought feed", html.includes("AGENT THOUGHTS")],
 ];
 
 // The end screen is only reachable once a match resolves, so render it directly
