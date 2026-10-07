@@ -121,22 +121,20 @@ export function GameHud({
       {/* Top bar */}
       <div className="flex flex-wrap items-start justify-between gap-3 p-3">
         <div className="flex flex-wrap items-center gap-2">
-          <span
-            className={cn(
-              "rounded-full border px-3 py-1 text-[10px] font-bold tracking-[0.2em]",
-              spectator
-                ? "border-[#a78bfa]/60 bg-[#a78bfa]/15 text-[#c4b5fd]"
-                : isImposter
+          {!spectator && (
+            <span
+              className={cn(
+                "rounded-full border px-3 py-1 text-[10px] font-bold tracking-[0.2em]",
+                isImposter
                   ? "border-[#ff4d6a]/60 bg-[#ff4d6a]/15 text-[#ff8a9c]"
                   : "border-signal/50 bg-signal/10 text-signal",
-            )}
-          >
-            {spectator
-              ? `SPECTATOR · ${snap.playerName} · FULL VISION`
-              : `${isImposter ? "IMPOSTER" : "CREW"} · ${snap.playerName} · ${
-                  snap.playerAlive ? `${aliveCount} ALIVE` : "DEAD"
-                }`}
-          </span>
+              )}
+            >
+              {`${isImposter ? "IMPOSTER" : "CREW"} · ${snap.playerName} · ${
+                snap.playerAlive ? `${aliveCount} ALIVE` : "DEAD"
+              }`}
+            </span>
+          )}
         </div>
 
         <div className="pointer-events-auto flex flex-wrap items-center gap-2">

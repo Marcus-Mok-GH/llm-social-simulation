@@ -11,9 +11,7 @@ import { Confessional } from "./Confessional";
 import { GameHud, TaskRail } from "./GameHud";
 import { Briefing, EndScreen, type RosterRow } from "./GameOverlays";
 import { MeetingOverlay } from "./MeetingOverlay";
-import { StationLog } from "./StationLog";
 import { TaskModal } from "./TaskModal";
-import { ThoughtFeed } from "./ThoughtFeed";
 import { TouchControls } from "./TouchControls";
 import { cn } from "@/lib/utils";
 
@@ -413,23 +411,14 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
         )}
       </div>
 
-      {/* The three read-out panels live in normal flow below the deck (and
-          below the meeting/end overlays), so they never fight the HUD for map
-          space. On desktop they sit side by side: the station log is what the
-          crew wrote, the confessional is what they were thinking, and the
-          thought feed is the raw decision log underneath both. */}
-      <div className="mt-3 grid gap-3 lg:grid-cols-3">
-        <StationLog entries={snap.stationLog} compact={isMobile} />
+      {/* The confessional read-out lives in normal flow below the deck (and
+          below the meeting/end overlays), so it never fights the HUD for map
+          space. */}
+      <div className="mt-3">
         <Confessional
           entries={snap.confessional}
           reveal={confessionalReveal}
           onReveal={() => setConfessionalOpen(true)}
-          compact={isMobile}
-        />
-        <ThoughtFeed
-          thoughts={snap.thoughts}
-          rawJsons={snap.rawJsons}
-          spectator={snap.spectator}
           compact={isMobile}
         />
       </div>
