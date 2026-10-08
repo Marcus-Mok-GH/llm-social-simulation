@@ -487,7 +487,7 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
 
 export interface AiContext {
   cfg: LlmConfig | null;
-  gate: { acquire: () => Promise<() => void> };
+  gate?: { acquire: () => Promise<unknown> };
   /** Requests left this match; prevents runaway spend. */
   budget: { remaining: number };
   /**
@@ -501,7 +501,8 @@ export interface AiContext {
 export async function intentWithModel(ctx: AiContext, view: WorldView): Promise<Intent | null> {
   if (!ctx.cfg || ctx.budget.remaining <= 0 || !view.self.alive) return null;
 
-  const release = await ctx.gate.acquire();
+  const release = ctx.gate?.acquire?.();
+  if (release) await release;
   try {
     if (ctx.budget.remaining <= 0) return null;
     ctx.budget.remaining--;
@@ -521,7 +522,7 @@ export async function intentWithModel(ctx: AiContext, view: WorldView): Promise<
     ctx.onRaw?.(text);
     return validateIntent(extractJson<unknown>(text), view);
   } finally {
-    release();
+    if (release) await release;
   }
 }
 
@@ -678,9 +679,8 @@ export async function statementWithModel(
     yourDeceptionStyle: mind.role === "imposter" && input.style ? personaFor(input.style).label : null,
     instruction:
       "This discussion is ongoing — build on the conversation so far and on what the human said (answer them directly if they spoke to you), and never repeat anything already said. Speak for yourself, from your own memory: only produce the spoken line.",
-  };
-
-  const release = await ctx.gate.acquire();
+  };      const release = ctx.gate?.acquire?.();
+      if (release) await release;
   try {
     if (ctx.budget.remaining <= 0) return null;
     ctx.budget.remaining--;
@@ -709,7 +709,7 @@ export async function statementWithModel(
     const claim = parseClaim(parsed.claim, map, mind, speaker, names, input);
     return { line, thinking, claim };
   } finally {
-    release();
+    if (release) await release;
   }
 }
 
@@ -735,9 +735,8 @@ export async function logEntryWithModel(
 ): Promise<string | null> {
   if (!ctx.cfg || ctx.budget.remaining <= 0) return null;
 
-  const { system, user } = buildLogPrompt({ ...args, brief: args.brief.brief });
-
-  const release = await ctx.gate.acquire();
+  const { system, user } = buildLogPrompt({ ...args, brief: args.brief.brief });      const release = ctx.gate?.acquire?.();
+      if (release) await release;
   try {
     if (ctx.budget.remaining <= 0) return null;
     ctx.budget.remaining--;
@@ -754,7 +753,7 @@ export async function logEntryWithModel(
     ctx.onRaw?.(text);
     return parseLogEntry(text);
   } finally {
-    release();
+    if (release) await release;
   }
 }
 

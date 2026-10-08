@@ -194,6 +194,18 @@ function runMatch(label: string, playerIsImposter: boolean, seed: number): Outco
     engine.tick(dt);
   }
 
+  // Handoff integrity: the meeting still gives out one slot at a time and only
+  // the slot's owner can release it, so a late async reply can never free or
+  // extend another agent's turn — even after the speech path was made parallel.
+  check(
+    engine.speakerViolations === 0,
+    `${label}: no agent ever spoke without a granted slot (viol=${engine.speakerViolations})`,
+  );
+  check(
+    engine.speakerOverlaps === 0,
+    `${label}: no two slots were granted at the same time (overlap=${engine.speakerOverlaps})`,
+  );
+
   const kills = engine.messages.filter((m) => m.text.includes("was killed")).length;
   const snap = engine.snapshot();
   const maxMem = Math.max(...engine.actors.map((a) => a.mind.memories.length));

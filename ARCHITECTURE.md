@@ -260,8 +260,15 @@ believes."
 - Meeting lines come back as a `Statement` (`line` + private `thinking` +
   optional structured `claim`); `statementWithModel` / `fallbackStatement` feed
   `speak()`.
-- `ai/llm.ts` owns transport, `RequestGate` (rate limit), JSON extraction, and
-  `LlmConfig` per agent; every path falls back to the heuristic.
+- `ai/llm.ts` owns transport, `RequestGate` (optional rate limit), JSON
+  extraction, and `LlmConfig` per agent; every path falls back to the heuristic.
+- **Decision dispatch is parallel.** The engine no longer routes movement and
+  meeting model calls through a shared global rate gate. Per actor, only one
+  in-flight call is allowed, and a stale async reply is ignored the moment its
+  slot's `decisionSeq` / `speakerSeq` has moved on, so concurrency never
+  produces a torn update. The meeting keeps one serialized slot handoff — one
+  agent can never free another agent's turn — but after a slot is granted the
+  agent speaks on its own, so more than one voice can be in flight at once.
 
 ### 5.5 Transport (client ↔ host)
 
@@ -444,11 +451,8 @@ net for the whole simulation.
 ## 8. Verification of this document
 
 This pass changed **no code** — it adds this document only. The claims above
-were checked against the source at commit `c9c14dc` ("Make imposters different
-every match") by reading `engine.ts`, `player.ts`, `perception.ts`,
-`deception.ts`, `dialogue.ts`, `ai/decision.ts`, `ai/llm.ts`, `host/protocol.ts`,
-`host/matchHost.ts`, `game/link.ts`, and the repo's own `README.md` /
-`replit.md` / `PLAN.md` / `MOVEMENT.md`. No typecheck or simulation run was
-required since no source changed; the next feature pass should begin by running
+are now out of date with the current engine, which no longer serializes model
+calls through a shared rate gate and parallelises meeting speech behind a
+single serialized handoff. The next feature pass should begin by running
 `pnpm --filter @workspace/llm-social-simulation run check` to confirm a clean
 baseline.

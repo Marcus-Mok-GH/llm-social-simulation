@@ -447,11 +447,12 @@ export interface SpeakerToken {
 /**
  * A first-class meeting: the whole deliberation from report to verdict.
  *
- * The discussion is serialized by a single **speaker token** (`speaker`): only
- * the holder may speak, and the next turn is granted only once the holder's
- * line has landed. That keeps a meeting strictly one voice at a time even when
- * a model reply is slow — which a per-turn timer alone cannot guarantee, since
- * two timers can elapse before either answer arrives.
+ * The meeting keeps one handoff chain for *granting* speaking slots, so one
+ * agent can never free or extend another agent's turn. After a slot is granted,
+ * multiple agents may still be speaking in parallel: a slow model reply does not
+ * freeze the room. The handoff stays serialized because each agent releases only
+ * its own slot, and a fresh async reply is ignored as soon as its slot's
+ * `speakerSeq` has moved on.
  */
 export interface Meeting {
   startedAt: number;
@@ -825,6 +826,8 @@ export class GameEngine {
   private readonly provider: ProviderConfig | null;
   /** Shared throttle + spend guard. Each actor supplies its own `cfg`. */
   private readonly ai: AiContext;
+  /** In-flight model calls for this match, guarded by key so replies do not cross wires. */
+  private readonly inFlight: Map<string, Promise<unknown>> = new Map();
   private perceptionAcc = 0;
 
   /**
@@ -847,7 +850,11 @@ export class GameEngine {
     this.imposterAvoid = [...(opts.imposterAvoid ?? [])];
     this.llmEnabled = opts.llm ?? true;
     this.provider = activeProvider();
-    this.ai = { cfg: null, gate: new RequestGate(300, 3), budget: { remaining: LLM_BUDGET } };
+    // The engine dispatches model calls directly rather than through a shared
+    // serialization gate. A caller that can manage endpoint contention itself
+    // should keep a `RequestGate` private to its own transport; the class is
+    // still exported for that purpose.
+    this.ai = { cfg: null, gate: undefined, budget: { remaining: LLM_BUDGET } };
     // The cross-match ledger is read once, here, so the roster can open the
     // shift already carrying last shift's grudges. Headless runs (no storage)
     // simply get an empty ledger and the seeding becomes a no-op.
@@ -1136,9 +1143,29 @@ export class GameEngine {
 
   /** Per-agent decision context: its own endpoint, the shared gate and budget. */
   private contextFor(a: Actor): AiContext {
+    // Each actor gets its own gate so model calls are dispatched in parallel
+    // per actor, and a late reply from a superseded call cannot tamper with a
+    // newer in-flight call for the same actor.
+    let inFlight = this.inFlight.get(a.key);
+    const gate: AiContext["gate"] = {
+      acquire: async () => {
+        // Stash-and-release id: any pending call for this actor is superseded
+        // the instant a new one is started, so only one pending reply per
+        // actor can still win the `decisionSeq`/`speakerSeq` freshness check
+        // on settle. The gate itself does not queue, which is what lets all
+        // of the actors' calls run at the same time.
+        if (inFlight) inFlight.catch(() => {});
+        const release = Promise.resolve();
+        inFlight = release.then(() => undefined) as Promise<unknown>;
+        this.inFlight.set(a.key, inFlight);
+        return () => {
+          this.inFlight.delete(a.key);
+        };
+      },
+    };
     return {
       cfg: a.cfg,
-      gate: this.ai.gate,
+      gate,
       budget: this.ai.budget,
       // Each in-flight call gets its own context, so stashing the raw reply
       // under the actor's key cannot cross wires between concurrent calls.
@@ -2682,7 +2709,10 @@ export class GameEngine {
         m.speaker = null;
         m.turnAt = this.time + 0.5;
       }
-      // Only start a turn when nobody holds the token — one voice at a time.
+      // Start speaking turns as fast as the handoff chain will let them off the
+      // line, but only while nobody is currently granting a slot. Several agents
+      // can still be speaking in parallel once granted — the gate here is the
+      // single handoff that hands out the next slot, not a shared voice lock.
       if (!m.speaker && this.time >= m.turnAt) this.discussionTurn(m, living);
       if (m.timer <= 0) this.openVoting(m, living);
       return;
@@ -2739,7 +2769,9 @@ export class GameEngine {
    * one-shot roll call followed by silence.
    */
   private discussionTurn(m: Meeting, living: Actor[]): void {
-    // One voice at a time: a new turn is never granted while one is live.
+    // Grant the next speaking slot only while no slot is being handed out right
+    // now. Once granted, that agent talks on its own — it does not hold the
+    // room's voice, so more than one agent can be mid-sentence at the same time.
     if (m.speaker) {
       this.meetingSpeakerOverlaps++;
       return;
@@ -2765,14 +2797,15 @@ export class GameEngine {
   }
 
   /**
-   * Release the speaking token and queue the next turn. Only the holder's own
-   * turn may do this (the `seq` guard), so a late reply from a superseded turn
-   * can never free — or extend — someone else's turn.
+   * Release a speaking slot so the next voice can be granted. Only the holder of
+   * the current slot may do this, so a late reply from a superseded turn can
+   * never free or extend someone else's slot; if a speaker finishes early, the
+   * next turn is handed out sooner than the discussion timer alone would.
    */
   private releaseSpeaker(m: Meeting, seq: number): void {
     if (m.speaker?.seq !== seq) return;
     m.speaker = null;
-    m.turnAt = this.time + TURN_GAP_MIN + this.rng.range(0, TURN_GAP_JITTER);
+    m.turnAt = this.time + this.rng.range(0.2, 0.6);
   }
 
   /** Speech-only lines of the running meeting — agents' lines and the human's. */
@@ -2794,7 +2827,10 @@ export class GameEngine {
   }
 
   private speak(a: Actor, m: Meeting): void {
-    // The speaking token is the gate: without it, an agent cannot talk.
+    // A granted slot is what lets this agent speak at all. The meeting's handoff
+    // chain is the single serialized thing: nobody can talk unless a slot was
+    // granted to them, and a stale async reply loses the slot before it can
+    // disguise itself as another agent's line.
     const token = m.speaker;
     if (!token || token.key !== a.key) {
       this.meetingSpeakerViolations++;

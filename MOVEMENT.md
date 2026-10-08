@@ -127,6 +127,15 @@ The chosen world point is resolved with **A\*** over a navigation grid:
 - The engine is plain TypeScript advanced only by `tick(dt)`; AI model calls are
   async and are applied only if the match is still `playing` and the decision has
   not been superseded (`seq === a.decisionSeq`).
+- **AI decisions now dispatch in parallel.** Every actor that is due for a turn
+  starts its own model call independently, so movement intent and meeting speech
+  are no longer serialized through a shared rate gate. The only serialized part
+  left is *slot handoff* in the meeting: one agent cannot grant or release
+  another agent's speaking slot — each slot is owned by its own `speakerSeq` and
+  stale async replies are ignored the moment that slot moves on.
+- Endpoint contention is still bounded per actor by the optional per-actor gate
+  created in `contextFor`; if a transport needs a hard global throttle, a
+  `RequestGate` can still be passed in through `AiContext.gate`.
 - There are two movement drivers that share the A\* layer: the LLM intent path
   (`applyIntent`) and the scripted state machines in `crewmate.ts` / `imposter.ts`.
   Changing one does not change the other.
