@@ -30,6 +30,12 @@ const checks: [string, boolean][] = [
   // …and the confessional is sealed at first, because it spoils the match.
   ["seals the confessional until asked", html.includes("SEALED")],
   ["offers the spoiler reveal", html.includes("REVEAL")],
+  // The broadcast front door: title card, cast, standings, features.
+  ["renders the ON AIR header", html.includes("ON AIR")],
+  ["renders the cast manifest", html.includes("CAST MANIFEST")],
+  ["renders the standings ladder", html.includes("STANDINGS")],
+  ["renders the feature grid", html.includes("WHY IT IS WORTH WATCHING")],
+  ["offers CTAs into the shift", html.includes("WATCH THE SHIFT")],
 ];
 
 // The end screen is only reachable once a match resolves, so render it directly

@@ -13,6 +13,12 @@ export interface RosterRow {
   isPlayer: boolean;
   /** The agent's own model, shown as a tooltip in the briefing. */
   model: string | null;
+  /**
+   * The role the engine dealt this seat. The briefing deliberately does not
+   * show it (that would hand the player the answer); the broadcast layer uses
+   * it for the audience-only reveal once you are spectating.
+   */
+  role: "crew" | "imposter";
 }
 
 interface BriefingProps {

@@ -12,11 +12,13 @@ import type { MatchRecord } from "@/game/persistence";
 import { drawMap } from "@/game/render/renderMap";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Confessional } from "./Confessional";
+import { Broadcast } from "./Broadcast";
 import { GameHud, TaskRail } from "./GameHud";
 import { Briefing, EndScreen, type RosterRow } from "./GameOverlays";
 import { MeetingOverlay } from "./MeetingOverlay";
 import { TaskModal } from "./TaskModal";
 import { TouchControls } from "./TouchControls";
+import { clearSpeech, loadVoiceEnabled, saveVoiceEnabled, speakLine } from "./voice";
 import { cn } from "@/lib/utils";
 
 /** Vertical space reserved above (HUD chips, task meter, task chip). */
@@ -53,6 +55,8 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
   const [conn, setConn] = useState<LinkStatus>("local");
   /** True once a hosted match has been adopted, to phrase the offline badge. */
   const [hosted, setHosted] = useState(false);
+  /** The cast's TTS voices — public lines only; see `voice.ts`. */
+  const [voice, setVoice] = useState(() => loadVoiceEnabled());
   const isMobile = useIsMobile();
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -265,6 +269,72 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
     setConfessionalOpen(false);
   };
 
+  // --- voices -------------------------------------------------------------
+  // Public lines only: meeting statements, the ejection verdict, the verdict.
+  // The gate re-anchors whenever it changes so toggling never speaks a backlog.
+  const voiceState = useRef({
+    inited: false,
+    msgs: 0,
+    stage: null as string | null,
+    phase: snap.phase,
+  });
+
+  useEffect(() => {
+    voiceState.current.inited = false;
+    if (!voice) clearSpeech();
+  }, [voice]);
+
+  useEffect(() => {
+    const v = voiceState.current;
+    const meeting = snap.meeting;
+    const msgs = meeting?.messages.length ?? 0;
+    const stage = meeting?.stage ?? null;
+
+    if (!voice) {
+      v.msgs = msgs;
+      v.stage = stage;
+      v.phase = snap.phase;
+      return;
+    }
+    if (!v.inited) {
+      // First frame after an enable or a rejoin: anchor, never read history.
+      v.inited = true;
+      v.msgs = msgs;
+      v.stage = stage;
+      v.phase = snap.phase;
+      return;
+    }
+
+    if (meeting && msgs > v.msgs) {
+      for (const m of meeting.messages.slice(v.msgs)) {
+        // System lines are stage direction; the player's own text is theirs.
+        if (m.kind === "system" || m.kind === "player") continue;
+        speakLine(m.text, m.speakerKey);
+      }
+    }
+    if (stage === "tally" && v.stage !== "tally") {
+      clearSpeech();
+      const e = meeting?.ejection;
+      speakLine(
+        e
+          ? `${e.name} ${e.isImposter ? "was an impostor" : "was innocent"}`
+          : "No one was ejected.",
+        "verdict",
+      );
+    }
+    if (snap.phase === "ended" && v.phase !== "ended" && snap.winner) {
+      clearSpeech();
+      speakLine(
+        snap.winner === "crew" ? "Crew victory." : "Imposter victory.",
+        "victory",
+      );
+    }
+
+    v.msgs = msgs;
+    v.stage = stage;
+    v.phase = snap.phase;
+  }, [snap, voice]);
+
   const uplink =
     conn === "live"
       ? hosted
@@ -309,6 +379,12 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
               snap={snap}
               compact={isMobile}
               analyst={analyst}
+              voice={voice}
+              onToggleVoice={() => setVoice((on) => {
+                const next = !on;
+                saveVoiceEnabled(next);
+                return next;
+              })}
               onToggleAnalyst={() => {
                 link.analyst = !link.analyst;
                 setAnalyst(link.analyst);
@@ -390,6 +466,10 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
         {snap.phase === "ended" && (
           <EndScreen snap={snap} history={history ?? []} onRestart={restart} />
         )}
+
+        {/* The produced show: slams, the ejection screen, the audience-only
+            reveal and the live ticker — all read from the event timeline. */}
+        <Broadcast snap={snap} roster={roster} compact={isMobile} />
       </div>
 
       {/* One line about where the match is running — the whole reason a

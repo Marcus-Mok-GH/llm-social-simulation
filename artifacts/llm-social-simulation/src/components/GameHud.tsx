@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
-import { Eye, Ghost } from "lucide-react";
+import { Eye, Ghost, Volume2, VolumeX } from "lucide-react";
 import type { Snapshot } from "@/game/engine";
+import { canSpeak } from "./voice";
 import { cn } from "@/lib/utils";
 
 interface GameHudProps {
@@ -11,6 +12,9 @@ interface GameHudProps {
   onToggleAnalyst: () => void;
   spectator: boolean;
   onToggleSpectate: () => void;
+  /** The cast's TTS voices: on, the meeting is spoken aloud. */
+  voice: boolean;
+  onToggleVoice: () => void;
 }
 
 function Chip({
@@ -62,6 +66,8 @@ export function GameHud({
   onToggleAnalyst,
   spectator,
   onToggleSpectate,
+  voice,
+  onToggleVoice,
 }: GameHudProps) {
   const isImposter = snap.role === "imposter";
   const aliveCount = snap.alive.crew + snap.alive.imposter;
@@ -138,6 +144,20 @@ export function GameHud({
         </div>
 
         <div className="pointer-events-auto flex flex-wrap items-center gap-2">
+          {canSpeak() && (
+            <Chip
+              active={voice}
+              onClick={onToggleVoice}
+              title={
+                voice
+                  ? "Voices on — the cast speaks its meeting lines aloud"
+                  : "Voices muted"
+              }
+            >
+              {voice ? <Volume2 className="h-3 w-3" /> : <VolumeX className="h-3 w-3" />}
+              {voice ? "VOICE" : "MUTED"}
+            </Chip>
+          )}
           <Chip
             active={analyst}
             onClick={onToggleAnalyst}

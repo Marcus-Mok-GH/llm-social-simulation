@@ -445,6 +445,13 @@ export interface Snapshot {
   confessional: ConfessionalEntry[];
   /** Cross-match reputations and grudges, or null when the ledger is off. */
   legacy: LegacyView | null;
+  /**
+   * The structured timeline so far — the same append-only beats the recap is
+   * built from. The broadcast layer reads it to narrate the shift live, so
+   * every on-screen call-out comes from a real event rather than from prose
+   * parsed back out of the chat.
+   */
+  events: MatchEvent[];
 }
 
 export interface EngineOptions {
@@ -3127,6 +3134,7 @@ export class GameEngine {
       stationLog: [...this.stationLog],
       confessional: [...this.confessional],
       legacy: this.legacyView(),
+      events: [...this.events],
       analyst: this.analystView
         ? this.actors
             .filter((a) => a.alive)
