@@ -10,6 +10,7 @@
 
 import { rankSuspects, type MemoryEntry, type Mind } from "./perception";
 import { roomById, type GameMap, type RoomId } from "./map";
+import { hashString } from "./rng";
 import {
   claimLine,
   crewClaim,
@@ -79,6 +80,7 @@ export function memoryToLine(
     case "accuse":
     case "vouch":
     case "caught":
+    case "reveal":
       return m.text;
     case "report":
     case "eject":
@@ -225,6 +227,61 @@ export function confessionalFallback(
   if (who) return `No proof yet — but I keep coming back to ${who}.`;
   if (mind.memories.length === 0) return "Haven't seen anything. I need eyes on the halls.";
   return "Nothing adds up yet. I'll keep watching where people actually walk.";
+}
+
+/**
+ * A candid line for the ghost channel.
+ *
+ * The dead have nothing left to hide: this is the one lane where an agent can
+ * simply say what it saw and who it suspects, with no audience to manage. It is
+ * deliberately model-free (the channel is flavour, not a spend) and pure, so a
+ * replayed shift ghosts identically.
+ */
+export function ghostStatement(
+  map: GameMap,
+  mind: Mind,
+  speaker: Speaker,
+  names: NameIndex,
+  index: number,
+): string {
+  const name = (key: string): string => names[key] ?? key;
+  const pick = (variants: string[]): string =>
+    variants[Math.abs(hashString(`${mind.key}|${index}|${mind.memories.length}`)) % variants.length];
+
+  // First-hand evidence is the ghost's strongest line — it can finally say it
+  // out loud.
+  for (let i = mind.memories.length - 1; i >= 0; i--) {
+    const m = mind.memories[i];
+    if (m.kind === "kill") {
+      return `It was ${name(m.actorKey)}. I watched them do it in ${roomName(map, m.roomId)}.`;
+    }
+    if (m.kind === "vent") {
+      return `${name(m.actorKey)} uses the vents — I saw it in ${roomName(map, m.roomId)}.`;
+    }
+  }
+  for (let i = mind.memories.length - 1; i >= 0; i--) {
+    const m = mind.memories[i];
+    if (m.kind === "caught") {
+      return `${name(m.actorKey)} lied to the room. I never got to say it out there.`;
+    }
+  }
+
+  const top = rankSuspects(mind, 0.08)[0];
+  if (top) {
+    return pick([
+      `My read was always ${name(top.key)}. I'd have voted them.`,
+      `${name(top.key)} is the one I'd be watching.`,
+      `Watch ${name(top.key)}. I had a bad feeling about them.`,
+    ]);
+  }
+  return pick([
+    `${speaker.name}, signing off.`,
+    "Nobody ever listens to the dead.",
+    "At least the station log keeps my work on the record.",
+    "Wish I could tell them who it was.",
+    "Cold out here. Quiet.",
+    "Whoever's left had better not blow it.",
+  ]);
 }
 
 /**

@@ -50,6 +50,7 @@ import {
 } from "./crewmate";
 import {
   confessionalFallback,
+  ghostStatement,
   heuristicStatement,
   type NameIndex,
   type Statement,
@@ -170,6 +171,15 @@ const DISCUSSION_TIME = 60;
 const VOTING_TIME = 20;
 const TALLY_TIME = 6;
 /**
+ * How long a speaker may hold the token before the engine forcibly frees it.
+ * It only ever matters when a model reply never lands — the heuristic path
+ * releases the token the instant its line is posted.
+ */
+const SPEAKER_DEADLINE = 20;
+/** Wait between turns, jittered — the room's natural back-and-forth rhythm. */
+const TURN_GAP_MIN = 2.2;
+const TURN_GAP_JITTER = 2.4;
+/**
  * How many recent transcript lines each agent reads before speaking, so the
  * discussion is a real back-and-forth: agents answer each other and the human
  * instead of monologuing from memory alone.
@@ -241,6 +251,76 @@ export type Phase = "briefing" | "playing" | "meeting" | "ended";
 export type Winner = "crew" | "imposter" | null;
 export type SabotageKind = "meltdown" | "blackout";
 
+/**
+ * An actor's participation status — the single source of truth for whether
+ * someone is on the deck, dead, watching from the gallery, or has dropped out.
+ *
+ * `Actor.alive` is *derived* from this (see the getter), so the two can never
+ * disagree. `spectator` and `disconnected` are reserved for the human seat; an
+ * AI actor is only ever `alive` or `dead`. Every change goes through
+ * `GameEngine.setActorStatus`, which owns the mechanical side effects.
+ */
+export type ActorStatus = "alive" | "dead" | "spectator" | "disconnected";
+
+/** True only in the one status where an actor takes part in the match. */
+export function isParticipating(status: ActorStatus): boolean {
+  return status === "alive";
+}
+
+// ---------------------------------------------------------------------------
+// Communication channels
+// ---------------------------------------------------------------------------
+
+/**
+ * Which lane a message travels on. Every channel has a declared audience, so a
+ * new lane is added here rather than by threading an audience check through
+ * every reader.
+ */
+export type ChannelId =
+  | "meeting"
+  | "system"
+  | "station-log"
+  | "confessional"
+  | "thought"
+  | "ghost";
+
+/** Who may read a channel. */
+export type ChannelAudience = "everyone" | "living" | "dead" | "spectators";
+
+/** A first-class communication channel: its audience, spoiler status and cap. */
+export interface ChannelDef {
+  id: ChannelId;
+  label: string;
+  audience: ChannelAudience;
+  /**
+   * Whether content here may move a reader's beliefs. Only the meeting channel
+   * carries structured claims, and only those go through `applyClaim` — the
+   * ghost channel is explicitly inert.
+   */
+  movesBelief: boolean;
+  /** Hidden from anyone who is not a spectator until the match ends. */
+  spoiler: boolean;
+  /** Ring-buffer cap in messages (0 = keep the whole match). */
+  retention: number;
+}
+
+export const CHANNELS: Record<ChannelId, ChannelDef> = {
+  meeting: { id: "meeting", label: "Meeting", audience: "everyone", movesBelief: true, spoiler: false, retention: 0 },
+  system: { id: "system", label: "Station", audience: "everyone", movesBelief: false, spoiler: false, retention: 0 },
+  "station-log": { id: "station-log", label: "Station Log", audience: "everyone", movesBelief: false, spoiler: false, retention: 0 },
+  confessional: { id: "confessional", label: "Confessional", audience: "spectators", movesBelief: false, spoiler: true, retention: 0 },
+  thought: { id: "thought", label: "Thought Feed", audience: "spectators", movesBelief: false, spoiler: true, retention: 0 },
+  ghost: { id: "ghost", label: "Ghost Channel", audience: "dead", movesBelief: false, spoiler: true, retention: 80 },
+};
+
+/**
+ * How long a single ghost holds the channel before another may speak, and the
+ * hush that follows — together they are what makes the ghost channel strictly
+ * one-voice-at-a-time.
+ */
+export const GHOST_TALK_TIME = 3.2;
+export const GHOST_QUIET_TIME = 1.6;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -252,7 +332,9 @@ export interface ChatMessage {
   speakerName: string;
   color: string;
   text: string;
-  kind: "statement" | "system" | "player";
+  kind: "statement" | "system" | "player" | "ghost";
+  /** The lane this message travels on — see `CHANNELS`. */
+  channel: ChannelId;
 }
 
 export interface Body {
@@ -312,7 +394,14 @@ export interface Actor {
   role: "crew" | "imposter";
   kind: EntityKind;
   isPlayer: boolean;
-  alive: boolean;
+  /**
+   * Participation status. The engine never writes this directly — every
+   * change goes through `GameEngine.setActorStatus`, which owns the side
+   * effects (halting a corpse, freeing the player's input, recounting tasks).
+   */
+  status: ActorStatus;
+  /** Derived from `status`, kept as a field so existing reads stay valid. */
+  readonly alive: boolean;
   /** Node-graph zone the actor currently occupies (PLAN.md step 1). */
   zoneId: string;
   entity: Player | Crewmate | Imposter;
@@ -342,7 +431,29 @@ export interface Actor {
   voteAt: number;
 }
 
-interface MeetingState {
+/**
+ * The right to speak. Exactly one agent holds this at a time, and holding it is
+ * the only way to add a line to a meeting transcript.
+ */
+export interface SpeakerToken {
+  key: string;
+  name: string;
+  /** Monotonic per-meeting turn id; a stale async reply carries an old seq. */
+  seq: number;
+  /** Simulation time the token was granted. */
+  since: number;
+}
+
+/**
+ * A first-class meeting: the whole deliberation from report to verdict.
+ *
+ * The discussion is serialized by a single **speaker token** (`speaker`): only
+ * the holder may speak, and the next turn is granted only once the holder's
+ * line has landed. That keeps a meeting strictly one voice at a time even when
+ * a model reply is slow — which a per-turn timer alone cannot guarantee, since
+ * two timers can elapse before either answer arrives.
+ */
+export interface Meeting {
   startedAt: number;
   stage: "discussion" | "voting" | "tally";
   timer: number;
@@ -364,6 +475,10 @@ interface MeetingState {
    * repeating the same accusation cannot stack the same belief repeatedly.
    */
   claimsApplied: Set<string>;
+  /** The one agent allowed to speak right now, or null between turns. */
+  speaker: SpeakerToken | null;
+  /** Monotonic per-meeting turn id, handed out with each token. */
+  speakerSeq: number;
 }
 
 export interface SpeakerView {
@@ -385,6 +500,8 @@ export interface RevealedVote {
 export interface MeetingView {
   stage: "discussion" | "voting" | "tally";
   secondsLeft: number;
+  /** The single agent holding the speaking token, or null between turns. */
+  speaking: string | null;
   reason: string;
   messages: ChatMessage[];
   speakers: SpeakerView[];
@@ -394,10 +511,19 @@ export interface MeetingView {
   ejection: { name: string; isImposter: boolean } | null;
 }
 
+/** One imposter's true identity, published once the match is over. */
+export interface ImposterReveal {
+  key: string;
+  name: string;
+  color: string;
+}
+
 export interface Snapshot {
   phase: Phase;
   winner: Winner;
   time: number;
+  /** The imposters' true identities once the verdict lands, else null. */
+  reveal: ImposterReveal[] | null;
   role: "crew" | "imposter";
   playerName: string;
   playerAlive: boolean;
@@ -450,6 +576,14 @@ export interface Snapshot {
   stationLog: StationLogEntry[];
   /** Per-agent private thoughts, oldest first. Spoilers: see `Confessional`. */
   confessional: ConfessionalEntry[];
+  /** The ghost channel transcript, oldest first. Dead-only; a spoiler. */
+  ghostChat: ChatMessage[];
+  /** Lifetime ghost lines, surviving the ring buffer. */
+  ghostMessages: number;
+  /** The single ghost holding the channel right now, or null while it is quiet. */
+  ghostSpeaker: string | null;
+  /** Every declared communication channel and its audience. */
+  channels: ChannelDef[];
   /** Cross-match reputations and grudges, or null when the ledger is off. */
   legacy: LegacyView | null;
   /**
@@ -590,9 +724,19 @@ export class GameEngine {
   taskComplete = 0;
   playerTasks: TaskAssignment[] = [];
 
-  meeting: MeetingState | null = null;
+  meeting: Meeting | null = null;
   meetingsHeld = 0;
   ejects = 0;
+  /** The imposters' true identities, published by the end-of-match reveal. */
+  reveal: ImposterReveal[] | null = null;
+  /** How many AI agents have been told the imposter identities. */
+  private revealedTo = 0;
+  /** Turns granted the speaking token this match — one voice at a time. */
+  private meetingSpeakerTurns = 0;
+  /** Attempts to speak without holding the token (must stay 0). */
+  private meetingSpeakerViolations = 0;
+  /** Turns granted while another was already live (must stay 0). */
+  private meetingSpeakerOverlaps = 0;
 
   sabotage: { kind: SabotageKind; secondsLeft: number; fixPoiIds: string[]; fixProgress: number } | null = null;
   sabotageCooldown = 0;
@@ -604,10 +748,28 @@ export class GameEngine {
   touchMove: MoveInput | null = null;
   log: string[] = [];
   messages: ChatMessage[] = [];
+  /** The ghost channel: the dead AIs talking among themselves; the living never hear it. */
+  ghostChat: ChatMessage[] = [];
+  /** The one ghost currently holding the channel, or null while it is quiet. */
+  private ghostSpeaker: string | null = null;
+  /** When the current speaker's turn ends and the channel frees up. */
+  private ghostSpeakerUntil = 0;
+  /** When the next ghost may begin. */
+  private ghostTurnAt = 0;
+  /** Round-robin cursor over the dead, so every ghost gets a turn. */
+  private ghostTurn = 0;
+  /** Lifetime ghost lines, kept across the ring buffer for audit. */
+  private ghostSpoken = 0;
 
   analystView = false;
-  /** Spectator mode: the player has left the match and watches with full vision. */
-  spectator = false;
+  /**
+   * Spectator mode: the player has left the roster and watches with full
+   * vision. Derived from the player's `status`, so it is the same fact as
+   * `playerActor.status === "spectator"` rather than a parallel flag.
+   */
+  get spectator(): boolean {
+    return this.playerActor.status === "spectator";
+  }
   /** Agent thought feed (ring buffer, oldest first) for the UI. */
   thoughts: ThoughtEntry[] = [];
   private nextThoughtId = 1;
@@ -754,7 +916,10 @@ export class GameEngine {
         role: playerRole,
         kind: "player",
         isPlayer: true,
-        alive: true,
+        status: "alive",
+        get alive(): boolean {
+          return isParticipating(this.status);
+        },
         zoneId: "",
         entity: this.player,
         mind: playerMind,
@@ -884,7 +1049,10 @@ export class GameEngine {
       role,
       kind: role === "crew" ? "crew" : "imposter",
       isPlayer: false,
-      alive: true,
+      status: "alive",
+      get alive(): boolean {
+        return isParticipating(this.status);
+      },
       zoneId: "",
       entity,
       mind: createMind(key, role),
@@ -1002,7 +1170,32 @@ export class GameEngine {
   }
 
   living(role?: "crew" | "imposter"): Actor[] {
-    return this.actors.filter((a) => a.alive && (!role || a.role === role));
+    return this.actors.filter((a) => isParticipating(a.status) && (!role || a.role === role));
+  }
+
+  /** Lifetime ghost lines this match (not capped by the transcript ring). */
+  get ghostMessages(): number {
+    return this.ghostSpoken;
+  }
+
+  /** Meeting turns granted the speaking token (audit: one voice at a time). */
+  get speakerTurns(): number {
+    return this.meetingSpeakerTurns;
+  }
+
+  /** Attempts to speak without the token — always 0 when the gate holds. */
+  get speakerViolations(): number {
+    return this.meetingSpeakerViolations;
+  }
+
+  /** How many AI agents the end-of-match reveal has informed (0 before it). */
+  get revealedAgents(): number {
+    return this.revealedTo;
+  }
+
+  /** Turns granted while another was already live — always 0. */
+  get speakerOverlaps(): number {
+    return this.meetingSpeakerOverlaps;
   }
 
   private note(text: string): void {
@@ -1010,8 +1203,22 @@ export class GameEngine {
     if (this.log.length > 6) this.log.shift();
   }
 
+  /**
+   * The single write path for chat. The channel's descriptor decides where a
+   * message lands (the public transcript or the ghost channel) and how many
+   * entries are retained, so adding a lane never means adding a store.
+   */
+  private publish(channel: ChannelId, msg: Omit<ChatMessage, "channel">): void {
+    const def = CHANNELS[channel];
+    const target = def.audience === "dead" ? this.ghostChat : this.messages;
+    target.push({ ...msg, channel });
+    if (def.retention > 0 && target.length > def.retention) {
+      target.splice(0, target.length - def.retention);
+    }
+  }
+
   private say(a: Actor, text: string, kind: ChatMessage["kind"] = "statement"): void {
-    this.messages.push({
+    this.publish("meeting", {
       id: this.nextMsgId++,
       t: this.time,
       speakerKey: a.key,
@@ -1022,8 +1229,21 @@ export class GameEngine {
     });
   }
 
+  /** A ghost line: dead-only, candid, and never a belief input for the living. */
+  private ghostSay(a: Actor, text: string): void {
+    this.publish("ghost", {
+      id: this.nextMsgId++,
+      t: this.time,
+      speakerKey: a.key,
+      speakerName: a.name,
+      color: a.color,
+      text,
+      kind: "ghost",
+    });
+  }
+
   private system(text: string): void {
-    this.messages.push({
+    this.publish("system", {
       id: this.nextMsgId++,
       t: this.time,
       speakerKey: "system",
@@ -1075,18 +1295,62 @@ export class GameEngine {
    */
   enterSpectator(): void {
     if (this.spectator || this.phase === "ended") return;
-    this.spectator = true;
     const me = this.playerActor;
-    me.alive = false;
-    this.keys.clear();
-    this.touchMove = null;
-    this.activeTask = null;
-    // The task bar must stay reachable without the departed player's quota.
-    this.syncTaskBudget();
+    // Departing the roster is the same status transition as death, so every
+    // existing rule applies for free: no kill target, no witness, no
+    // sightings, no meeting seat and no task credit. `setActorStatus` also
+    // frees the player's input and recounts the task bar without its quota.
+    this.setActorStatus(me, "spectator");
     const ended = this.checkWin();
     if (!ended) {
       this.note("You left the match — spectating with full deck vision.");
     }
+  }
+
+  /**
+   * The one place an actor's participation status changes.
+   *
+   * `status` is the single source of truth (`Actor.alive` is derived from it),
+   * so this owns every mechanical side effect of a change: a departing AI body
+   * is halted and pulled off the deck, the player gives up held input and any
+   * open task, and the shared task bar is recounted so the remaining crew can
+   * still reach it.
+   *
+   * Win evaluation is deliberately *not* part of this transition: `resolveVote`
+   * defers `checkWin()` to `finishMeeting` so the tally screen and the meeting
+   * memories land before the verdict, and the other callers ask for it
+   * themselves.
+   */
+  private setActorStatus(a: Actor, next: ActorStatus): void {
+    if (a.status === next) return;
+    const wasParticipating = isParticipating(a.status);
+    a.status = next;
+
+    if (!isParticipating(next) && a.kind !== "player") {
+      // Pull a departing AI body off the deck: nothing may draw, target or
+      // collide with a corpse.
+      if (a.kind === "crew") {
+        const c = a.entity as Crewmate;
+        crewmateHalt(c);
+        c.x = -9999;
+        c.y = -9999;
+      } else {
+        const i = a.entity as Imposter;
+        imposterHalt(i);
+        i.x = -9999;
+        i.y = -9999;
+      }
+    }
+
+    // The player leaving the roster gives up held input and any open task. A
+    // *dead* player is left exactly as it was, matching the previous behaviour.
+    if (a.isPlayer && (next === "spectator" || next === "disconnected")) {
+      this.keys.clear();
+      this.touchMove = null;
+      this.activeTask = null;
+    }
+
+    if (wasParticipating) this.syncTaskBudget();
   }
 
   // -- perception ----------------------------------------------------------
@@ -1237,13 +1501,7 @@ export class GameEngine {
     const vy = victim.entity.y;
     const roomId = roomAt(this.map, vx, vy).id;
 
-    victim.alive = false;
-    if (victim.kind === "crew") {
-      const c = victim.entity as Crewmate;
-      crewmateHalt(c);
-      c.x = -9999;
-      c.y = -9999;
-    }
+    this.setActorStatus(victim, "dead");
     killer.killCooldown = KILL_COOLDOWN;
 
     const body: Body = {
@@ -1284,7 +1542,6 @@ export class GameEngine {
     }
 
     if (victim.isPlayer) this.note("You are dead — spectate and watch the others.");
-    this.syncTaskBudget();
     this.checkWin();
     return true;
   }
@@ -2260,6 +2517,44 @@ export class GameEngine {
     }
   }
 
+  // -- ghost channel -------------------------------------------------------
+
+  /**
+   * The dead talk to each other. One ghost holds the channel at a time: a
+   * speaker is chosen, publishes a single candid line, and the channel stays
+   * locked until that ghost's turn ends, then hushes before the next voice.
+   *
+   * Nothing here touches a living agent's `Mind` — the ghost channel is purely
+   * additive, so it can never change who the living suspect or how they vote.
+   */
+  private tickGhostChat(): void {
+    if (this.ghostSpeaker !== null && this.time >= this.ghostSpeakerUntil) {
+      this.ghostSpeaker = null;
+    }
+    // One voice at a time: while a ghost holds the channel, nobody else speaks.
+    if (this.ghostSpeaker !== null) return;
+    if (this.time < this.ghostTurnAt) return;
+
+    const dead = this.actors.filter((a) => !a.isPlayer && a.status === "dead");
+    if (dead.length === 0) return;
+
+    const speaker = dead[this.ghostTurn % dead.length];
+    this.ghostTurn++;
+    const line = ghostStatement(
+      this.map,
+      speaker.mind,
+      { key: speaker.key, name: speaker.name },
+      this.names,
+      this.ghostTurn,
+    );
+    if (!line) return;
+    this.ghostSay(speaker, line);
+    this.ghostSpoken++;
+    this.ghostSpeaker = speaker.key;
+    this.ghostSpeakerUntil = this.time + GHOST_TALK_TIME;
+    this.ghostTurnAt = this.ghostSpeakerUntil + GHOST_QUIET_TIME;
+  }
+
   // -- reporting -----------------------------------------------------------
 
   private startMeeting(reason: { kind: "emergency" | "report"; byKey: string }): void {
@@ -2292,7 +2587,7 @@ export class GameEngine {
     revealAround(this.vis, sx, sy, 320);
 
     const living = this.living();
-    const meeting: MeetingState = {
+    const meeting: Meeting = {
       startedAt: this.time,
       stage: "discussion",
       timer: DISCUSSION_TIME,
@@ -2306,6 +2601,8 @@ export class GameEngine {
       lastSpeaker: null,
       msgStart: this.messages.length,
       claimsApplied: new Set(),
+      speaker: null,
+      speakerSeq: 0,
     };
 
     for (const a of living) a.voteAt = 0;
@@ -2379,7 +2676,14 @@ export class GameEngine {
     const living = this.living();
 
     if (m.stage === "discussion") {
-      if (this.time >= m.turnAt) this.discussionTurn(m, living);
+      // A model reply that never lands must not freeze the room: free the token
+      // after the deadline so the discussion keeps flowing.
+      if (m.speaker && this.time - m.speaker.since > SPEAKER_DEADLINE) {
+        m.speaker = null;
+        m.turnAt = this.time + 0.5;
+      }
+      // Only start a turn when nobody holds the token — one voice at a time.
+      if (!m.speaker && this.time >= m.turnAt) this.discussionTurn(m, living);
       if (m.timer <= 0) this.openVoting(m, living);
       return;
     }
@@ -2404,10 +2708,12 @@ export class GameEngine {
     if (m.timer <= 0) this.finishMeeting();
   }
 
-  private openVoting(m: MeetingState, living: Actor[]): void {
+  private openVoting(m: Meeting, living: Actor[]): void {
     if (m.stage !== "discussion") return;
     m.stage = "voting";
     m.timer = VOTING_TIME;
+    // Any outstanding speaker token dies with the discussion.
+    m.speaker = null;
     let i = 0;
     for (const a of living) {
       if (a.isPlayer) continue;
@@ -2432,25 +2738,45 @@ export class GameEngine {
    * seconds out, so the meeting reads as a real back-and-forth rather than a
    * one-shot roll call followed by silence.
    */
-  private discussionTurn(m: MeetingState, living: Actor[]): void {
-    const candidates = living.filter((a) => !a.isPlayer);
-    if (candidates.length > 0) {
-      const fewest = Math.min(...candidates.map((a) => m.spoken.get(a.key) ?? 0));
-      let pool = candidates.filter(
-        (a) => (m.spoken.get(a.key) ?? 0) === fewest && a.key !== m.lastSpeaker,
-      );
-      if (pool.length === 0) pool = candidates.filter((a) => a.key !== m.lastSpeaker);
-      if (pool.length === 0) pool = candidates;
-      const speaker = this.rng.pick(pool);
-      m.spoken.set(speaker.key, (m.spoken.get(speaker.key) ?? 0) + 1);
-      m.lastSpeaker = speaker.key;
-      this.speak(speaker, m);
+  private discussionTurn(m: Meeting, living: Actor[]): void {
+    // One voice at a time: a new turn is never granted while one is live.
+    if (m.speaker) {
+      this.meetingSpeakerOverlaps++;
+      return;
     }
-    m.turnAt = this.time + 2.2 + this.rng.range(0, 2.4);
+    const candidates = living.filter((a) => !a.isPlayer);
+    if (candidates.length === 0) {
+      m.turnAt = this.time + TURN_GAP_MIN + this.rng.range(0, TURN_GAP_JITTER);
+      return;
+    }
+    const fewest = Math.min(...candidates.map((a) => m.spoken.get(a.key) ?? 0));
+    let pool = candidates.filter(
+      (a) => (m.spoken.get(a.key) ?? 0) === fewest && a.key !== m.lastSpeaker,
+    );
+    if (pool.length === 0) pool = candidates.filter((a) => a.key !== m.lastSpeaker);
+    if (pool.length === 0) pool = candidates;
+    const speaker = this.rng.pick(pool);
+    m.spoken.set(speaker.key, (m.spoken.get(speaker.key) ?? 0) + 1);
+    m.lastSpeaker = speaker.key;
+    m.speakerSeq++;
+    m.speaker = { key: speaker.key, name: speaker.name, seq: m.speakerSeq, since: this.time };
+    this.meetingSpeakerTurns++;
+    this.speak(speaker, m);
+  }
+
+  /**
+   * Release the speaking token and queue the next turn. Only the holder's own
+   * turn may do this (the `seq` guard), so a late reply from a superseded turn
+   * can never free — or extend — someone else's turn.
+   */
+  private releaseSpeaker(m: Meeting, seq: number): void {
+    if (m.speaker?.seq !== seq) return;
+    m.speaker = null;
+    m.turnAt = this.time + TURN_GAP_MIN + this.rng.range(0, TURN_GAP_JITTER);
   }
 
   /** Speech-only lines of the running meeting — agents' lines and the human's. */
-  private meetingTranscript(m: MeetingState): { speaker: string; text: string }[] {
+  private meetingTranscript(m: Meeting): { speaker: string; text: string }[] {
     return this.messages
       .slice(m.msgStart)
       .filter((c) => c.kind === "statement" || c.kind === "player")
@@ -2459,7 +2785,7 @@ export class GameEngine {
   }
 
   /** Everything the human has said this meeting, oldest first. */
-  private meetingHumanLines(m: MeetingState): string[] {
+  private meetingHumanLines(m: Meeting): string[] {
     return this.messages
       .slice(m.msgStart)
       .filter((c) => c.kind === "player")
@@ -2467,7 +2793,13 @@ export class GameEngine {
       .map((c) => c.text);
   }
 
-  private speak(a: Actor, m: MeetingState): void {
+  private speak(a: Actor, m: Meeting): void {
+    // The speaking token is the gate: without it, an agent cannot talk.
+    const token = m.speaker;
+    if (!token || token.key !== a.key) {
+      this.meetingSpeakerViolations++;
+      return;
+    }
     // Same freshness rule as `decide`: a statement may only show the raw JSON
     // that arrives for its own model call.
     this.lastRawByKey.delete(a.key);
@@ -2487,8 +2819,11 @@ export class GameEngine {
     };
 
     const post = (stmt: Statement, source: ThoughtSource, json?: string | null): void => {
-      // Late model replies must not leak into voting or the next meeting.
-      if (this.meeting !== m || m.stage !== "discussion") return;
+      // Late model replies must not leak into voting, the next meeting, or a
+      // turn whose token has already moved on.
+      if (this.meeting !== m || m.stage !== "discussion" || m.speaker?.seq !== token.seq) {
+        return;
+      }
       // The spoken line belongs in the meeting chat itself — without this the
       // agents would only appear in the thought feed and confessional, and the
       // room would read as silent.
@@ -2521,6 +2856,8 @@ export class GameEngine {
       // A structured claim is public: hand it to every other listener's belief
       // model, where it either shades their read or exposes the speaker.
       this.applyClaim(a, m, stmt.claim);
+      // The line has landed: hand the channel to the next voice.
+      this.releaseSpeaker(m, token.seq);
     };
 
     if (this.llmEnabled && a.cfg) {
@@ -2568,7 +2905,7 @@ export class GameEngine {
    * One speaker may not stack the same claim on the same target all meeting,
    * so a single traitor cannot talk a target over the voting threshold alone.
    */
-  private applyClaim(speaker: Actor, m: MeetingState, claim: Claim | null | undefined): void {
+  private applyClaim(speaker: Actor, m: Meeting, claim: Claim | null | undefined): void {
     if (!claim) return;
     const id = `${speaker.key}|${claim.kind}|${claim.about}`;
     if (m.claimsApplied.has(id)) return;
@@ -2647,7 +2984,7 @@ export class GameEngine {
     m.votes["player"] = targetKey;
   }
 
-  private resolveVote(m: MeetingState, living: Actor[]): void {
+  private resolveVote(m: Meeting, living: Actor[]): void {
     const tally = new Map<string, number>();
     for (const target of Object.values(m.votes)) {
       const key = target ?? "skip";
@@ -2680,19 +3017,7 @@ export class GameEngine {
 
     const ejectedRoom = roomAt(this.map, ejected.entity.x, ejected.entity.y).id;
 
-    ejected.alive = false;
-    if (ejected.kind === "crew") {
-      const c = ejected.entity as Crewmate;
-      crewmateHalt(c);
-      c.x = -9999;
-      c.y = -9999;
-    }
-    if (ejected.kind === "imposter") {
-      imposterHalt(ejected.entity as Imposter);
-      const i = ejected.entity as Imposter;
-      i.x = -9999;
-      i.y = -9999;
-    }
+    this.setActorStatus(ejected, "dead");
 
     this.ejects++;
     m.ejected = ejected.key;
@@ -2718,7 +3043,6 @@ export class GameEngine {
       role: ejected.role,
       voters: voterNames,
     });
-    this.syncTaskBudget();
 
     for (const a of living) {
       remember(a.mind, {
@@ -2765,7 +3089,7 @@ export class GameEngine {
    * own verdicts, so later reasoning is grounded in what really happened rather
    * than in whatever an agent imagined.
    */
-  private recordMeetingMemory(m: MeetingState): void {
+  private recordMeetingMemory(m: Meeting): void {
     const byName = this.names[m.reason.byKey] ?? m.reason.byKey;
     const reason =
       m.reason.kind === "emergency"
@@ -2795,7 +3119,50 @@ export class GameEngine {
     this.phase = "ended";
     this.system(reason);
     this.events.push({ kind: "end", t: this.time, winner, reason });
+    // The debrief: every agent learns who the imposters really were.
+    this.publishReveal();
     this.onMatchEnd?.(winner);
+  }
+
+  /**
+   * End-of-match reveal. Once the verdict lands the simulation stops being a
+   * game of hidden roles, so every AI is told the truth: the imposters are
+   * announced on the public channel and written into each agent's memory log as
+   * a `reveal` entry. Because it is a memory, the knowledge is auditable — an
+   * agent that held a wrong read all shift ends up holding the right answer —
+   * and because its kind weighs zero it can never move a belief.
+   *
+   * It runs exactly once, guarded by the `phase === "ended"` check in
+   * `endMatch`, and never while the match is still live.
+   */
+  private publishReveal(): void {
+    const imposters = this.actors.filter((a) => a.role === "imposter");
+    this.reveal = imposters.map((a) => ({ key: a.key, name: a.name, color: a.color }));
+
+    const names = imposters.map((a) => a.name);
+    const announce =
+      names.length <= 1
+        ? `The imposter was ${names[0] ?? "unknown"}.`
+        : `The imposters were ${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}.`;
+    this.system(announce);
+
+    // Tell every AI — the dead included. The player seat is skipped: the reveal
+    // is for the agents, and the gallery already sees the roster's roles.
+    let informed = 0;
+    for (const a of this.actors) {
+      if (a.isPlayer) continue;
+      for (const imp of imposters) {
+        remember(a.mind, {
+          t: this.time,
+          kind: "reveal",
+          actorKey: imp.key,
+          roomId: roomAt(this.map, imp.entity.x, imp.entity.y).id,
+          text: `${imp.name} was an imposter.`,
+        });
+      }
+      informed++;
+    }
+    this.revealedTo = informed;
   }
 
   private checkWin(): boolean {
@@ -3076,6 +3443,9 @@ export class GameEngine {
 
     if (this.phase !== "playing") return;
 
+    // The dead talk among themselves on their own one-voice-at-a-time channel.
+    this.tickGhostChat();
+
     // Overtime: impatient traitors and a hard stop.
     if (this.time > OVERTIME_AT) {
       for (const a of this.actors) {
@@ -3109,6 +3479,7 @@ export class GameEngine {
     return {
       stage: m.stage,
       secondsLeft: Math.max(0, Math.ceil(m.timer)),
+      speaking: m.speaker?.name ?? null,
       reason:
         m.reason.kind === "emergency"
           ? "Emergency meeting"
@@ -3150,6 +3521,7 @@ export class GameEngine {
       phase: this.phase,
       winner: this.winner,
       time: this.time,
+      reveal: this.reveal ? this.reveal.map((r) => ({ ...r })) : null,
       role: me.role,
       playerName: me.name,
       playerAlive: me.alive,
@@ -3205,6 +3577,10 @@ export class GameEngine {
       rawJsons: [...this.rawJsons],
       stationLog: [...this.stationLog],
       confessional: [...this.confessional],
+      ghostChat: [...this.ghostChat],
+      ghostMessages: this.ghostSpoken,
+      ghostSpeaker: this.ghostSpeaker ? (this.names[this.ghostSpeaker] ?? this.ghostSpeaker) : null,
+      channels: Object.values(CHANNELS),
       legacy: this.legacyView(),
       events: [...this.events],
       analyst: this.analystView

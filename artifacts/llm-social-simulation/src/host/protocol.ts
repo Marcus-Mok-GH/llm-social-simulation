@@ -8,7 +8,7 @@
  */
 
 import type { ActorRow, Seat } from "../game/link";
-import type { Body, Snapshot } from "../game/engine";
+import type { ActorStatus, Body, Snapshot } from "../game/engine";
 import type { Player } from "../game/player";
 import type { Crewmate } from "../game/crewmate";
 import type { Imposter } from "../game/imposter";
@@ -21,6 +21,8 @@ export interface RenderWire {
   revealRoles: boolean;
   player: Player;
   playerAlive: boolean;
+  /** The player's participation status (`playerAlive` is derived from it). */
+  playerStatus: ActorStatus;
   crew: Crewmate[];
   imp: Imposter[];
   bodies: Body[];

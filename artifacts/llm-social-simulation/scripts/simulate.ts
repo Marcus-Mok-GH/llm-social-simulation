@@ -17,7 +17,7 @@
  */
 
 import { type Vec2 } from "../src/game/collision";
-import { GameEngine } from "../src/game/engine";
+import { GameEngine, GHOST_TALK_TIME } from "../src/game/engine";
 import { UMBRA_DECK_MAP } from "../src/game/map";
 import { buildNavGrid, findPath, type NavGrid } from "../src/game/navigation";
 import { rankSuspects } from "../src/game/perception";
@@ -201,6 +201,9 @@ function runMatch(label: string, playerIsImposter: boolean, seed: number): Outco
   console.log(
     `\n[${label}] phase=${engine.phase} winner=${engine.winner} t=${engine.time.toFixed(0)}s ` +
       `meetings=${snap.meetings} ejects=${snap.ejects} kills=${kills} ` +
+      `ghosts=${engine.ghostMessages} ` +
+      `speaker-turns=${engine.speakerTurns}(viol=${engine.speakerViolations},overlap=${engine.speakerOverlaps}) ` +
+      `reveal=${engine.reveal ? engine.reveal.map((r) => r.name).join("+") : "—"} informed=${engine.revealedAgents} ` +
       `tasks=${engine.taskComplete}/${engine.taskTotal} frames=${frames} ` +
       `longest-log: ${maxMem} events / ${maxJournal} decisions`,
   );
@@ -368,6 +371,94 @@ function audit({ engine, kills }: Outcome, label: string): void {
   check(
     summary !== null && summary.ejections.length === engine.ejects,
     `${label}: every ejection is banked with its voters`,
+  );
+
+  // 12. The ghost channel: dead AIs talk to each other, one voice at a time,
+  //     and the living never appear on it.
+  const ghost = engine.ghostChat;
+  check(
+    engine.ghostMessages > 0,
+    `${label}: dead AIs opened the ghost channel (${engine.ghostMessages} lines)`,
+  );
+  check(ghost.length > 0, `${label}: the ghost channel transcript is populated`);
+  check(
+    ghost.every((m) => m.channel === "ghost" && m.kind === "ghost"),
+    `${label}: every ghost line is tagged on the ghost channel`,
+  );
+  check(
+    new Set(ghost.map((m) => m.speakerKey)).size > 0,
+    `${label}: the ghost channel is actually used by the dead`,
+  );
+  check(
+    ghost.every((m) => engine.actor(m.speakerKey)?.status === "dead"),
+    `${label}: only dead AIs speak on the ghost channel`,
+  );
+  let ghostSpaced = true;
+  for (let i = 1; i < ghost.length; i++) {
+    if (ghost[i].t - ghost[i - 1].t < GHOST_TALK_TIME) ghostSpaced = false;
+  }
+  check(ghostSpaced, `${label}: one ghost speaks at a time (turns stay spaced)`);
+
+  // 13. The meeting speaker token: at most one voice holds the floor, and a
+  //     line can only be spoken while holding it.
+  check(
+    engine.speakerViolations === 0,
+    `${label}: no agent spoke without the meeting token (${engine.speakerViolations} violations)`,
+  );
+  check(
+    engine.speakerOverlaps === 0,
+    `${label}: no turn was granted while another was live (${engine.speakerOverlaps} overlaps)`,
+  );
+  check(
+    engine.speakerTurns > 0,
+    `${label}: the discussion granted speaker turns (${engine.speakerTurns})`,
+  );
+  const spokenLines = engine.messages.filter((m) => m.kind === "statement").length;
+  check(
+    spokenLines <= engine.speakerTurns,
+    `${label}: meeting lines never outnumber tokens (${spokenLines} lines / ${engine.speakerTurns} turns)`,
+  );
+
+  // 14. End-of-match reveal: once the verdict lands, every AI is told who the
+  //     imposters actually were.
+  const reveal = engine.reveal;
+  const aiAgents = engine.actors.filter((a) => !a.isPlayer);
+  const trueImposters = engine.actors.filter((a) => a.role === "imposter");
+  check(engine.phase === "ended", `${label}: the match reached its final state`);
+  check(reveal !== null, `${label}: the imposters are revealed at the end`);
+  check(
+    (reveal?.length ?? 0) === trueImposters.length,
+    `${label}: the reveal names every imposter (${reveal?.length ?? 0}/${trueImposters.length})`,
+  );
+  check(
+    (reveal ?? []).every((r) => {
+      const actor = engine.actor(r.key);
+      return actor?.role === "imposter" && actor.name === r.name;
+    }),
+    `${label}: every revealed name is a real imposter`,
+  );
+  check(
+    engine.revealedAgents === aiAgents.length,
+    `${label}: every AI was informed (${engine.revealedAgents}/${aiAgents.length})`,
+  );
+  check(
+    aiAgents.every((a) =>
+      trueImposters.every((imp) =>
+        a.mind.memories.some((m) => m.kind === "reveal" && m.actorKey === imp.key),
+      ),
+    ),
+    `${label}: every AI holds a reveal memory for each imposter`,
+  );
+  check(
+    engine.messages.some((m) => m.kind === "system" && m.text.startsWith("The imposter")),
+    `${label}: the reveal is announced in the transcript`,
+  );
+  // The reveal must not have moved any belief: it is knowledge, not evidence.
+  check(
+    aiAgents.every((a) =>
+      Object.values(a.mind.suspicion).every((s) => s >= 0 && s <= 1),
+    ),
+    `${label}: suspicion stayed in range through the reveal`,
   );
 }
 

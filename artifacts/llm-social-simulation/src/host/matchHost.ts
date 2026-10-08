@@ -340,6 +340,7 @@ export class MatchHost {
         revealRoles: e.analystView,
         player: { ...e.player },
         playerAlive: e.playerActor.alive,
+        playerStatus: e.playerActor.status,
         crew: e.crewmates.map((c) => ({ ...c })),
         imp: e.imposters.map((i) => ({ ...i })),
         bodies: e.bodies.map((b) => ({ ...b })),

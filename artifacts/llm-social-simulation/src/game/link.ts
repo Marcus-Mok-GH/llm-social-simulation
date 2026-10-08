@@ -15,7 +15,7 @@
  * `GameLink`, so the two modes cannot drift apart.
  */
 
-import { GameEngine, type Snapshot } from "./engine";
+import { GameEngine, type ActorStatus, type Snapshot } from "./engine";
 import { foldMatch, loadLegacy, saveLegacy } from "./legacy";
 import { saveMatch, type MatchRecord } from "./persistence";
 import type { Player, MoveInput } from "./player";
@@ -37,6 +37,8 @@ export interface ActorRow {
   isPlayer: boolean;
   role: "crew" | "imposter";
   model: string | null;
+  /** Participation status — alive / dead / spectator / disconnected. */
+  status: ActorStatus;
 }
 
 /**
@@ -114,6 +116,7 @@ function rosterOf(engine: GameEngine): ActorRow[] {
     isPlayer: a.isPlayer,
     role: a.role,
     model: a.cfg?.model ?? null,
+    status: a.status,
   }));
 }
 

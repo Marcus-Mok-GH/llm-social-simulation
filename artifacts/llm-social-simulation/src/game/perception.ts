@@ -42,7 +42,13 @@ export type MemoryKind =
   /** Someone publicly vouched for the actor — the only belief that can fall. */
   | "vouch"
   /** Someone said something this listener's own eyes prove false. */
-  | "caught";
+  | "caught"
+  /**
+   * End-of-match debrief: this actor's true role, told to every agent after the
+   * verdict. It is knowledge, not evidence — the match is already over — so it
+   * carries no suspicion weight.
+   */
+  | "reveal";
 
 export interface MemoryEntry {
   /** Simulation time in seconds. */
@@ -169,6 +175,7 @@ const KIND_WEIGHT: Record<MemoryKind, number> = {
   report: 0,
   eject: 0,
   log: 0,
+  reveal: 0,
 };
 
 /**

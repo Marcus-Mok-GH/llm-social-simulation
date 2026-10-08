@@ -11,6 +11,7 @@ import type { MatchRecord } from "@/game/persistence";
 import { drawMap } from "@/game/render/renderMap";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Confessional } from "./Confessional";
+import { GhostChat } from "./GhostChat";
 import { Broadcast } from "./Broadcast";
 import { GameHud } from "./GameHud";
 import { Briefing, EndScreen, type RosterRow } from "./GameOverlays";
@@ -72,6 +73,10 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
   // one of the players: while spectating, after the verdict, or if you ask.
   const confessionalReveal =
     snap.spectator || snap.phase === "ended" || confessionalOpen;
+
+  // Ghost chat is dead-only, so it is a spoiler for a living player: legible
+  // while spectating or after the verdict, sealed otherwise.
+  const ghostReveal = snap.spectator || snap.phase === "ended";
 
   // --- the uplink ----------------------------------------------------------
   // Dial the station host on mount. While it answers, the match runs there:
@@ -421,6 +426,17 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
           entries={snap.confessional}
           reveal={confessionalReveal}
           onReveal={() => setConfessionalOpen(true)}
+          compact={isMobile}
+        />
+      </div>
+
+      {/* The other private lane: the dead talking among themselves, one voice
+          at a time. It appears the moment the first ghost speaks. */}
+      <div className="mt-3">
+        <GhostChat
+          messages={snap.ghostChat}
+          speaker={snap.ghostSpeaker}
+          reveal={ghostReveal}
           compact={isMobile}
         />
       </div>
