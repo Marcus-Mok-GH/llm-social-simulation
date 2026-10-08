@@ -525,7 +525,17 @@ export function drawSeatModels(
 ): SeatModelDraw {
   if (pool.length === 0) return { imposters: [], crew: [] };
 
-  const cast = makeRng((seed ^ 0x51ed270b) >>> 0);
+  // When avoiding previous impostors, the draw must vary even with the same
+  // seed — otherwise shifts alternate between the same two pairs. Mix the
+  // avoid list into the seed so each shift's draw is genuinely different.
+  let effectiveSeed = seed >>> 0;
+  for (let i = 0; i < avoid.length; i++) {
+    effectiveSeed = Math.imul(effectiveSeed ^ avoid[i].length, 0x9e3779b9) >>> 0;
+    effectiveSeed ^= (effectiveSeed << 13) >>> 0;
+  }
+  effectiveSeed = (effectiveSeed ^ 0x51ed270b) >>> 0;
+  
+  const cast = makeRng(effectiveSeed);
   const order = [...pool];
   for (let i = order.length - 1; i > 0; i--) {
     const j = cast.int(i + 1);
