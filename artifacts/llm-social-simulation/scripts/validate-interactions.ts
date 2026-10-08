@@ -11,7 +11,13 @@
  */
 import { GameEngine, INTERACT_RANGE, KILL_RANGE, KILL_COOLDOWN } from "../src/game/engine";
 import { remember } from "../src/game/perception";
-import type { Interactable, Intent } from "../src/ai/decision";
+import {
+  heuristicIntent,
+  validateIntent,
+  type Interactable,
+  type Intent,
+  type WorldView,
+} from "../src/ai/decision";
 
 let failures = 0;
 function check(cond: boolean, msg: string): void {
@@ -33,6 +39,7 @@ interface EngineInternals {
   updateSabotage(dt: number): void;
   buildView(actor: unknown): {
     interactables: Interactable[];
+    lead: string | null;
     system_message: string | null;
     zones: { id: string; name: string }[];
     your_goal: string | null;
@@ -276,6 +283,78 @@ check(melt.meeting !== null, "the report opens a meeting");
 check(
   melt.messages.some((m) => m.text.includes("interrupted the meltdown")),
   "the cancellation is announced to the crew",
+);
+
+// --- 11. Venting and sabotage are out of the vocabulary; the beacon is in ---
+const ai = new GameEngine({ playerIsImposter: false, seed: 21, llm: false });
+ai.begin();
+const aiInternals = ai as unknown as EngineInternals;
+const traitor = ai.actors.find((a) => a.role === "imposter");
+const hopeful = ai.actors.find((a) => a.kind === "crew");
+if (!traitor || !hopeful) {
+  console.error("engine did not build a crewmate and an imposter");
+  process.exit(1);
+}
+
+const traitorView = aiInternals.buildView(traitor) as unknown as WorldView;
+check(
+  validateIntent({ action: "VENT", target: "vent_admin" }, traitorView) === null,
+  "VENT is no longer part of the AI vocabulary",
+);
+check(
+  validateIntent({ action: "SABOTAGE" }, traitorView) === null,
+  "SABOTAGE is no longer part of the AI vocabulary",
+);
+check(
+  validateIntent(
+    { action: "INTERACT", target: "sab_hand_n", interaction_type: "FIX" },
+    traitorView,
+  ) === null,
+  "FIX (sabotage repair) is no longer offered to agents either",
+);
+
+// The offline fallback never emits them either, over many seeded draws.
+let seed = 12345;
+const rand = (): number => {
+  seed = (seed * 1664525 + 1013904223) >>> 0;
+  return seed / 4294967296;
+};
+let onlyMoveOrInteract = true;
+for (let i = 0; i < 400; i++) {
+  const it = heuristicIntent(aiInternals.buildView(traitor) as unknown as WorldView, rand);
+  if (it.action !== "MOVE" && it.action !== "INTERACT") onlyMoveOrInteract = false;
+}
+check(onlyMoveOrInteract, "the offline heuristic only ever moves or interacts");
+
+// A crewmate with a real lead, standing at the beacon, calls the meeting itself.
+const aiBeacon = ai.map.pointsOfInterest.find((p) => p.kind === "emergency");
+if (!aiBeacon) {
+  console.error("map has no emergency beacon");
+  process.exit(1);
+}
+hopeful.entity.x = aiBeacon.x + 8;
+hopeful.entity.y = aiBeacon.y + 8;
+hopeful.tasks = [];
+hopeful.mind.suspicion[traitor.key] = 0.6;
+const atBeacon = aiInternals.buildView(hopeful);
+const button = atBeacon.interactables.find((i) => i.type === "EMERGENCY");
+check(button?.in_range === true, "the beacon is advertised as in_range where the crewmate stands");
+check(
+  atBeacon.lead !== null,
+  `the engine hands the heuristic a lead ("${atBeacon.lead}")`,
+);
+const press = heuristicIntent(atBeacon as unknown as WorldView, () => 0.1);
+check(
+  press.action === "INTERACT" &&
+    press.interaction_type === "EMERGENCY" &&
+    press.target === aiBeacon.id,
+  "a crewmate standing at the beacon with a lead decides to call the meeting",
+);
+aiInternals.applyIntent(hopeful, press);
+check(ai.phase === "meeting", "the emergency meeting opens");
+check(
+  ai.meeting?.reason.kind === "emergency" && ai.meeting.reason.byKey === hopeful.key,
+  "the meeting was called at the beacon by that crewmate",
 );
 
 if (failures > 0) {

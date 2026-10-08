@@ -97,7 +97,6 @@ function view(role: "crew" | "imposter"): WorldView {
       { poiId: "task_medbay", label: "Submit Scan", roomId: "medbay", roomName: "MedBay" },
       { poiId: "task_electrical", label: "Calibrate Distributor", roomId: "electrical", roomName: "Electrical" },
     ],
-    vents: ["vent_cafeteria", "vent_medbay", "vent_electrical"],
     interactables: [
       { id: "task_cafeteria", type: "TASK", name: "Empty Garbage", status: "incomplete", in_range: true },
     ],
@@ -133,8 +132,10 @@ function view(role: "crew" | "imposter"): WorldView {
         ejected: null,
       },
     ],
-    sabotage: null,
-    cooldowns: { kill: role === "imposter" ? 0 : 99, sabotage: role === "imposter" ? 0 : 99 },
+    // Engine-internal for the heuristic only — `summarise` never sees it, so
+    // no suspicion value reaches the model.
+    lead: role === "crew" ? "VEGA" : null,
+    cooldowns: { kill: role === "imposter" ? 0 : 99 },
     bodyOutstanding: false,
     taskProgress: 0.35,
     // Cross-match context: this agent has played before and walked in already
@@ -176,8 +177,11 @@ for (const role of ["crew", "imposter"] as const) {
   console.log(`\n[${role}] intent:`, JSON.stringify(intent));
   check(intent !== null, `${role} agent returned a validated intent`);
 
-  if (intent && (intent.action === "VENT" || intent.action === "SABOTAGE")) {
-    check(role === "imposter", "vent/sabotage is only accepted from an imposter");
+  if (intent) {
+    check(
+      intent.action === "MOVE" || intent.action === "INTERACT",
+      `${role} intent stays inside the MOVE/INTERACT vocabulary (no vent, no sabotage)`,
+    );
   }
   if (intent?.action === "MOVE") {
     check(

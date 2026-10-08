@@ -2,7 +2,7 @@
 
 A social-deduction match you *watch*, where every player is an LLM-driven
 agent. Six AIs hold the seats aboard a space station: crew run tasks, hidden
-imposters lie, kill and sabotage — and the traitors are drawn at random from
+imposters lie and kill — and the traitors are drawn at random from
 the cast before every shift, a different pair each match. You spectate from the
 gallery. The AI agents are the research subject — they **perceive** only what
 line of sight allows, **remember** it, **reason** about who to trust, and
@@ -16,19 +16,19 @@ line of sight allows, **remember** it, **reason** about who to trust, and
 | **Vision fog** | Ray-cast visibility polygon + persistent "explored" memory, with wall occlusion |
 | **Viewer** | Spectating only — full deck vision, analyst overlay, spoken meeting lines and the spoiler-gated confessional. There is no seat to take: the AIs play the whole match |
 | **Tasks** | Per-agent task lists built to the Among Us docs' job sizes (5 short + 2 long per crewmate), shared station bar, two minigame formats (wiring, calibration) |
-| **Interactions** | Agents choose `INTERACT` (`TASK`/`KILL`/`FIX`/`REPORT`/`EMERGENCY`) against objects in their current node; the engine re-checks distance, game state and line of sight, rejects illegal actions and feeds the reason back as `system_message` |
+| **Interactions** | Agents choose `INTERACT` (`TASK`/`KILL`/`REPORT`/`EMERGENCY`) against objects in their current node; the engine re-checks distance, game state and line of sight, rejects illegal actions and feeds the reason back as `system_message` |
 | **Kills & bodies** | Kill is a validated interaction with a real witness check (line of sight within 230u), corpses, reporting |
-| **Sabotage** | Reactor meltdown (30s, The Skeld's length — both Reactor hand scanners must be held at once by two people; the beacon locks out until it is fixed or a body is reported) and lights out (halves every agent's vision — repaired in Electrical) |
-| **Meetings** | Report or emergency beacon → discussion → voting → tally → ejection |
-| **Belief model** | Per-agent complete match log (every event, sighting, decision and meeting, from start to finish) + suspicion vector with decay, vent sightings, body-room inference |
-| **LLM decision loop** | A configurable OpenAI-compatible provider (Pollinations or Berget) returns validated JSON intents (`MOVE`/`INTERACT`/`VENT`/`SABOTAGE`) and meeting lines; each AI agent runs a **different** model from a cheap-model pool, with heuristic fallback on any failure |
+| **Sabotage & vents — removed** | No agent can trigger a sabotage or travel by vent any more; the traitor's toolkit is the kill, the lies, and the crowd. (The referee machinery stays in the engine only so the headless checks can still drive it directly.) |
+| **Meetings** | Report a body, or press the emergency beacon — AI crewmates walk to the Cafeteria beacon and call one themselves when they have a real lead → discussion → voting → tally → ejection |
+| **Belief model** | Per-agent complete match log (every event, sighting, decision and meeting, from start to finish) + suspicion vector with decay, body-room inference |
+| **LLM decision loop** | A configurable OpenAI-compatible provider (Pollinations or Berget) returns validated JSON intents (`MOVE`/`INTERACT`) and meeting lines; each AI agent runs a **different** model from a cheap-model pool, with heuristic fallback on any failure |
 | **Deception & identification** | Every traitor is handed a persona (wire-puller / provocateur / confidant / ghost) and lies in meetings with structured claims — `accuse`, `vouch`, `alibi`. Every listener weighs a claim against its own memory: an unverifiable smear only shades suspicion, but a claim its own eyes contradict brands the speaker a liar (`caught`) — the crew's way of identifying imposters |
 | **Autonomous station host** | The match runs server-side in the preview process: it starts on its own, keeps ticking with the tab closed (every shift is spectated, so the six AIs play the whole match), folds every shift into the cross-match ledger and chains the next one — the browser is a viewer that can close and rejoin |
 | **Persistence** | Finished matches, transcripts and every agent's suspicion snapshot saved to `localStorage` in local mode, and to the shared server-side history when the shift runs on the host |
 | **Station log** | Ten consoles ask the crew to *write* a line (a scan readout, an intercept summary, a cargo note) instead of waiting out a timer. Entries are public — every agent can quote them in a meeting — and a traitor writes a cover story |
 | **Confessional** | Every decision and meeting line carries the agent's private thought, one channel underneath the public one. Sealed through the briefing (it spoils the match), legible the moment you are watching |
 | **Cross-match ledger** | Wins, eliminations and grudges survive between shifts. An agent voted out blames every voter and opens the next match already watching them |
-| **Match recap** | A structured timeline of the shift (kills, sabotage, meetings, ejections, verdict) is recorded as it happens and the end screen re-tells it as a short *story of the shift* — a spotlight on the decisive beat (the mislynch, the clean kill), then the full beat sheet and the closing private thought |
+| **Match recap** | A structured timeline of the shift (kills, meetings, ejections, verdict) is recorded as it happens and the end screen re-tells it as a short *story of the shift* — a spotlight on the decisive beat (the mislynch, the clean kill), then the full beat sheet and the closing private thought |
 | Analyst view | Optional overlay showing each agent's current top suspect |
 | **Deck artwork** | The official Skeld art (`public/skeld-map.webp`) is the deck itself: actors, task markers and fog render on top of it |
 
@@ -252,7 +252,7 @@ watching.
    capped well below the threshold at which anyone acts on a suspicion, so last
    shift's drama colours the read without ever outvoting this shift's evidence.
 
-Those channels are raw material; the **recap** is the edit. Every kill, sabotage,
+Those channels are raw material; the **recap** is the edit. Every kill,
 meeting, ejection and verdict is banked as a structured event as it happens, and
 the end screen folds that timeline — plus the confessional — into a compact
 story with one spotlighted beat and the line the audience takes away. It is

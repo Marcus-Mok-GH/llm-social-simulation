@@ -45,8 +45,10 @@ Environment:
 ## Where things live
 
 - `artifacts/llm-social-simulation/src/game/engine.ts` — the whole match: phases,
-  perception, kills, sabotage, meetings, voting, win conditions. No React, no
-  wall-clock time; `tick(dt)` is the only way the world advances.
+  perception, kills, meetings, voting, win conditions. No React, no
+  wall-clock time; `tick(dt)` is the only way the world advances. Venting and
+  sabotage were removed from the game — no agent can do either — and the
+  remaining machinery exists only so the headless checks can drive it directly.
 - `src/game/vision.ts` — line-of-sight test, visibility grid, ray-cast polygon,
   explored memory. Source of truth for "can this agent see that?".
 - `src/game/perception.ts` — the agent's complete match log (append-only events,
@@ -55,7 +57,10 @@ Environment:
   the rule that lets a listener catch a claim its own memory contradicts.
 - `src/ai/decision.ts` — the pluggable AI layer: node-graph serialization
   (current_location, valid_moves, visible_players, current_time) plus
-  MOVE/VENT/SABOTAGE intents and meeting dialogue, with heuristic fallbacks.
+  MOVE/INTERACT intents and meeting dialogue, with heuristic fallbacks.
+  Venting and sabotage were removed from the vocabulary; an AI crewmate with
+  a real lead walks to the Cafeteria beacon and calls an emergency meeting
+  (INTERACT/EMERGENCY), same as the model-driven path.
   `src/ai/llm.ts` — transport, rate gate, JSON extraction.
 - `src/game/map.ts` — the deck as data (rooms, corridors, points of interest).
 - `src/game/zones.ts` — the spatial node graph: rooms and corridors as discrete

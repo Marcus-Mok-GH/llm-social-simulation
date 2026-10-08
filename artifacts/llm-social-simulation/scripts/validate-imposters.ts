@@ -3,7 +3,8 @@
  *  - navigate using pathfinding and stay walkable / in bounds
  *  - never perform crewmate tasks (no "working" state)
  *  - fake work at consoles for an alibi
- *  - use vent POIs to travel, emerging at a different vent
+ *  - never touch a vent: venting was removed from the game, so no imposter
+ *    may enter the seeking_vent / venting states or rack up a vent travel
  *
  * Run: bun scripts/validate-imposters.ts
  */
@@ -23,10 +24,7 @@ function check(cond: boolean, msg: string): void {
   }
 }
 
-const ALLOWED: ImposterState[] = ["idle", "walking", "faking", "seeking_vent", "venting"];
-const vents = map.pointsOfInterest.filter((p) => p.kind === "vent");
-check(vents.length >= 2, `map has at least 2 vent POIs (got ${vents.length})`);
-console.log(`Vent POIs available: ${vents.length}`);
+const ALLOWED: ImposterState[] = ["idle", "walking", "faking"];
 
 const grid = buildNavGrid(map);
 const los = makeLosTest(map);
@@ -39,8 +37,8 @@ for (const imp of imps) {
 }
 
 const dt = 1 / 60;
-const ticks = 60 * 240; // 240 simulated seconds — long enough that both
-// imposters get unwatched moments to vent under the honest sight-only rule.
+const ticks = 60 * 240; // 240 simulated seconds — long enough that the old
+// vent behaviour would have fired repeatedly if it were still present.
 
 const stateTime = imps.map(() => new Map<string, number>());
 const travel = imps.map(() => 0);
@@ -48,8 +46,6 @@ const travel = imps.map(() => 0);
 const worked = new Set<string>();
 let allValid = true;
 let crewEverWorked = false;
-let ventJumps = 0;
-let maxVentJump = 0;
 
 for (let t = 0; t < ticks; t++) {
   for (const c of crew) {
@@ -67,10 +63,9 @@ for (let t = 0; t < ticks; t++) {
   for (const imp of imps) {
     const px = imp.x;
     const py = imp.y;
-    const before = imp.state;
-    // Same rule the engine referee applies: venting is only offered when no
-    // crewmate is within sight (range + line of sight), so the state machine
-    // is exercised exactly as it behaves in a real match.
+    // The engine still passes "nobody is in sight" as `canVent`; with venting
+    // removed from the planner it can never matter, but the travel machinery
+    // keeps the gate so a driven trip still aborts when watched.
     const watched = crew.some(
       (c) => Math.hypot(c.x - imp.x, c.y - imp.y) <= BASE_VISION && los(imp.x, imp.y, c.x, c.y),
     );
@@ -82,14 +77,7 @@ for (let t = 0; t < ticks; t++) {
     if (!ALLOWED.includes(imp.state)) allValid = false;
 
     stateTime[imp.id].set(imp.state, (stateTime[imp.id].get(imp.state) ?? 0) + dt);
-
-    if (before === "venting" && imp.state !== "venting") {
-      // Teleport out of the vent: measure the jump instead of walking it.
-      ventJumps++;
-      maxVentJump = Math.max(maxVentJump, Math.hypot(imp.x - px, imp.y - py));
-    } else {
-      travel[imp.id] += Math.hypot(imp.x - px, imp.y - py);
-    }
+    travel[imp.id] += Math.hypot(imp.x - px, imp.y - py);
   }
 }
 
@@ -99,15 +87,15 @@ check(allValid, "imposters stayed walkable, finite, in bounds, and out of the 'w
 check(crewEverWorked, "crewmates performed tasks (contrast with imposters)");
 
 const totalVents = imps.reduce((s, i) => s + i.ventCount, 0);
-check(totalVents >= 2, `imposters used vents (total vent travels ${totalVents})`);
-check(ventJumps >= 2, `observed vent teleports (${ventJumps})`);
-check(maxVentJump > 150, `vent travel moved the imposter a meaningful distance (max ${Math.round(maxVentJump)}u)`);
+check(totalVents === 0, `imposters never used a vent (total vent travels ${totalVents})`);
 
 for (const imp of imps) {
   const faking = stateTime[imp.id].get("faking") ?? 0;
+  const venting =
+    (stateTime[imp.id].get("seeking_vent") ?? 0) + (stateTime[imp.id].get("venting") ?? 0);
   check(faking > 3, `${imp.name} spent time faking tasks for an alibi (${faking.toFixed(1)}s)`);
   check(travel[imp.id] > 500, `${imp.name} travelled via movement (${Math.round(travel[imp.id])}u)`);
-  check(imp.ventCount >= 1, `${imp.name} personally used a vent (${imp.ventCount})`);
+  check(venting === 0, `${imp.name} never entered a vent state (${venting.toFixed(1)}s)`);
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +154,7 @@ for (const imp of imps) {
   const parts = ALLOWED.map((s) => `${s}=${(stateTime[imp.id].get(s) ?? 0).toFixed(1)}`).join("  ");
   console.log(`  ${imp.name.padEnd(6)} vents=${imp.ventCount}  walked=${Math.round(travel[imp.id])}u  ${parts}`);
 }
-console.log(`\nTotal vent travels: ${totalVents}  |  max vent jump: ${Math.round(maxVentJump)}u`);
+console.log(`\nTotal vent travels: ${totalVents} (must be 0 — venting was removed)`);
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);

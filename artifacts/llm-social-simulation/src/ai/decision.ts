@@ -17,7 +17,9 @@
  * EMERGENCY), and the engine acts as a referee — it checks distance, game state
  * and line of sight before anything happens. A rejected action never executes;
  * the failure is fed back to the agent as `system_message` on its next turn so
- * it can correct itself. `VENT` and `SABOTAGE` remain the traitor's abilities.
+ * it can correct itself. Venting and sabotage were removed from the vocabulary:
+ * no agent can enter a vent or trigger a sabotage, and the only role-gated
+ * interaction left is the traitor's `KILL`.
  *
  * The model path asks the agent's configured provider for JSON and validates
  * it. On *any* failure — no key, timeout, rate limit, malformed JSON,
@@ -119,7 +121,6 @@ export interface WorldView {
   tasks: (TaskRef & { done: boolean })[];
   /** Every task console, so imposters can fake one. */
   consoles: TaskRef[];
-  vents: string[];
   /** Everything the agent can interact with from where it currently stands. */
   interactables: Interactable[];
   /** The engine's verdict on the agent's last rejected action, if any. */
@@ -165,19 +166,14 @@ export interface WorldView {
     lines: string[];
     ejected: string | null;
   }[];
-  sabotage: {
-    kind: string;
-    secondsLeft: number;
-    fixPoiId: string;
-    fixRoomId: RoomId;
-    /**
-     * Every repair point and whether *someone else* is already holding it. The
-     * reactor's two scanners must be held at once, so `held` is what tells an
-     * agent whether to take the open scanner or stay on the one it has.
-     */
-    fixPois: { id: string; roomId: RoomId; held: boolean }[];
-  } | null;
-  cooldowns: { kill: number; sabotage: number };
+  /**
+   * The name of the agent this one most suspects right now, or null for "no
+   * strong lead". Engine-internal: it drives the offline heuristic's
+   * emergency-beacon choice and is deliberately *not* serialized in
+   * `summarise` — no suspicion value ever reaches a model prompt.
+   */
+  lead: string | null;
+  cooldowns: { kill: number };
   /** True only while the agent can currently see an unreported body. */
   bodyOutstanding: boolean;
   taskProgress: number;
@@ -204,10 +200,11 @@ export interface WorldView {
 /**
  * The model's whole vocabulary. `MOVE` is the movement primitive (target is a
  * zone id or name); `INTERACT` is the interaction primitive (PLAN.md step 2),
- * carrying a target id and an interaction type; `VENT` and `SABOTAGE` are the
- * traitor's engine-owned abilities. Working a console, killing, repairing,
- * reporting and the emergency beacon are all chosen by the agent and validated
- * by the engine — never resolved by proximity alone.
+ * carrying a target id and an interaction type. Working a console, killing,
+ * reporting a body and calling an emergency meeting at the beacon are all
+ * chosen by the agent and validated by the engine — never resolved by
+ * proximity alone. There is no `VENT` or `SABOTAGE`: those abilities were
+ * removed, and nothing in the game can trigger them any more.
  */
 export type InteractIntent = {
   action: "INTERACT";
@@ -217,15 +214,16 @@ export type InteractIntent = {
   reasoning?: string;
 };
 
-export type Intent =
-  | { action: "MOVE"; target: string; reasoning?: string }
-  | InteractIntent
-  | { action: "VENT"; target?: string; reasoning?: string }
-  | { action: "SABOTAGE"; reasoning?: string };
+export type Intent = { action: "MOVE"; target: string; reasoning?: string } | InteractIntent;
 
-const INTENT_ACTIONS = ["MOVE", "INTERACT", "VENT", "SABOTAGE"] as const;
+const INTENT_ACTIONS = ["MOVE", "INTERACT"] as const;
 type IntentAction = (typeof INTENT_ACTIONS)[number];
-const INTERACTION_TYPES: InteractionType[] = ["TASK", "KILL", "FIX", "REPORT", "EMERGENCY"];
+/**
+ * What a model may ask the referee to do. `FIX` is deliberately absent — it
+ * belonged to the sabotage system, which was removed; the engine keeps its
+ * FIX case only for the headless checks that drive a sabotage directly.
+ */
+const INTERACTION_TYPES: InteractionType[] = ["TASK", "KILL", "REPORT", "EMERGENCY"];
 
 // ---------------------------------------------------------------------------
 // Prompt
@@ -234,9 +232,9 @@ const INTERACTION_TYPES: InteractionType[] = ["TASK", "KILL", "FIX", "REPORT", "
 const INTENT_SCHEMA = [
   "Reply with ONLY a JSON object:",
   '{"action":"<one of ' + INTENT_ACTIONS.join("|") + '>","target":"<zone name, player name, or object id>","interaction_type":"<one of ' + INTERACTION_TYPES.join("|") + '>","reasoning":"<=12 words"}',
-  'For MOVE, "target" is where you want to go: a zone name, a player name, or an object id you know of (a console, repair panel, vent or body). The station walks you there.',
+  'For MOVE, "target" is where you want to go: a zone name, a player name, or an object id you know of (a console, the beacon, or a body). The station walks you there.',
   'For INTERACT, "target" is an id from interactables and "interaction_type" says what to do; the station checks distance, game state and line of sight before it happens.',
-  'For VENT, "target" is an optional vent id. SABOTAGE takes no target.',
+  'EMERGENCY calls a meeting at the Cafeteria beacon (object id "emergency"): walk there first, then INTERACT with it when it is in range.',
   "Include only the fields your chosen action needs. No prose, no markdown.",
 ].join(" ");
 
@@ -247,9 +245,9 @@ function systemPrompt(view: WorldView): string {
     "object — and the station walks you there.",
     "You act on objects and people with INTERACT. A referee verifies every action and, if it",
     "is rejected, tells you why in system_message on your next turn so you can correct it.",
-    "A reactor meltdown needs BOTH hand scanners in Reactor held at the same time by two",
-    "different people: if a scanner already has someone on it, take the other one instead of",
-    "doubling up, and only then does the repair progress.",
+    "The Cafeteria emergency beacon (object id \"emergency\") calls an emergency meeting:",
+    "walk there, then INTERACT with it. Use it when you have a real suspicion worth putting",
+    "to the room — the crew then gathers to discuss and vote.",
     "You keep a memory between turns: your current goal, why you chose your last action, and",
     "a recap of every meeting. Nothing is forgotten: your_history holds every event you have",
     "observed this match, your_decisions holds every decision you have made, and your_goal /",
@@ -265,11 +263,11 @@ function systemPrompt(view: WorldView): string {
     return [
       "You are a hidden traitor aboard a space station in a social-deduction game.",
       "Your goal is to eliminate crewmates secretly while never looking suspicious.",
-      "You kill only by standing close to a lone crewmate with nobody watching, so move",
-      "toward zones where a crewmate is isolated. You may sabotage to split the crew up,",
-      "and slip into vents to escape.",
-      `Your fellow traitors: ${view.known_allies.length > 0 ? view.known_allies.join(", ") : "none"}. You can never act against them.`,
-      `Kill cooldown: ${Math.ceil(view.cooldowns.kill)}s. Sabotage cooldown: ${Math.ceil(view.cooldowns.sabotage)}s.`,
+    "You kill only by standing close to a lone crewmate with nobody watching, so move",
+    "toward zones where a crewmate is isolated. You have no vents and no sabotages —",
+    "stay hidden among the crew instead.",
+    `Your fellow traitors: ${view.known_allies.length > 0 ? view.known_allies.join(", ") : "none"}. You can never act against them.`,
+    `Kill cooldown: ${Math.ceil(view.cooldowns.kill)}s.`,
       view.your_personality
         ? `Your deception style is the ${view.your_personality.label}. ${view.your_personality.playbook}`
         : "Manage your alibi as carefully as your kills.",
@@ -280,7 +278,9 @@ function systemPrompt(view: WorldView): string {
     "You are a crew member aboard a space station in a social-deduction game.",
     "Finish the station tasks and work out who the hidden traitors are.",
     "Move toward zones that hold one of your unfinished task consoles; group up when a",
-    "hazard or a body is found. You do not know who the traitors are.",
+    "body is found. You do not know who the traitors are. When you have a real",
+    "suspicion, walk to the Cafeteria emergency beacon and INTERACT with it to call an",
+    "emergency meeting and put your read to the room.",
     ...common,
   ].join("\n");
 }
@@ -305,11 +305,9 @@ function summarise(view: WorldView): Record<string, unknown> {
     last_reasoning: view.last_reasoning,
     last_move: view.last_move,
     meeting_history: view.meeting_history,
-    sabotage: view.sabotage,
     cooldowns: view.cooldowns,
     bodyOutstanding: view.bodyOutstanding,
     taskProgress: Number(view.taskProgress.toFixed(2)),
-    vents: view.vents,
     interactables: view.interactables,
     system_message: view.system_message,
     shifts_played: view.shifts_played,
@@ -318,7 +316,7 @@ function summarise(view: WorldView): Record<string, unknown> {
   };
 }
 
-function validateIntent(raw: unknown, view: WorldView): Intent | null {
+export function validateIntent(raw: unknown, view: WorldView): Intent | null {
   if (typeof raw !== "object" || raw === null) return null;
   const obj = raw as Record<string, unknown>;
   const action = obj.action;
@@ -345,11 +343,9 @@ function validateIntent(raw: unknown, view: WorldView): Intent | null {
       // distance, game state and line of sight (PLAN.md step 3).
       return { action: "INTERACT", target, interaction_type: itype, reasoning };
     }
-    case "VENT":
-      return view.self.role === "imposter" ? { action: "VENT", target, reasoning } : null;
-    case "SABOTAGE":
-      return view.self.role === "imposter" ? { action: "SABOTAGE", reasoning } : null;
     default:
+      // `VENT` and `SABOTAGE` land here: they are no longer part of the
+      // vocabulary, so a model that still emits one is refused outright.
       return null;
   }
 }
@@ -362,16 +358,6 @@ function validateIntent(raw: unknown, view: WorldView): Intent | null {
  * Choose a destination zone using the same node data the model sees. Returns a
  * zone id; the engine resolves it and paths from the current node.
  */
-/**
- * Stable per-agent number, used to split a crew across the reactor's two
- * scanners without a shared coordinator: two agents that both see both pads
- * open will usually hash to different ones.
- */
-function agentHash(key: string): number {
-  let h = 0;
-  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
-  return h;
-}
 
 export function heuristicIntent(view: WorldView, rand: () => number): Intent {
   const pickFrom = <T>(arr: T[]): T | null => (arr.length > 0 ? arr[Math.floor(rand() * arr.length)] : null);
@@ -394,26 +380,12 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
         reasoning: "isolated target in range",
       };
 
-    if (!view.sabotage && view.cooldowns.sabotage <= 0 && rand() < 0.4) {
-      return { action: "SABOTAGE", reasoning: "split the crew up" };
-    }
-
     if (view.cooldowns.kill <= 0) {
       // Everyone in `others` is currently in sight — the view never contains a
       // player the agent cannot see, so there is no off-screen hunting.
       const prey = view.others.filter((o) => !o.allied).sort((a, b) => b.isolation - a.isolation);
       if (prey.length > 0 && rand() < 0.8)
         return { action: "MOVE", target: prey[0].key, reasoning: "prey is visible and alone" };
-      // Venting only when nobody is in sight: vision is symmetric, so an
-      // imposter that cannot see the crew cannot be seen by them either. A
-      // witnessed vent is a confession.
-      if (view.others.length === 0 && view.vents.length > 0 && rand() < 0.35) {
-        return {
-          action: "VENT",
-          target: pickFrom(view.vents) ?? undefined,
-          reasoning: "reposition unseen",
-        };
-      }
       // No one in sight: hunt where the agent itself last saw someone. That is
       // memory, not tracking — by the time it arrives the trail may be cold.
       const trail = view.last_seen.filter((s) => !view.others.some((o) => o.key === s.key));
@@ -436,39 +408,7 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
         reasoning: "build an alibi while the kill recharges",
       };
     }
-    if (view.others.length === 0 && view.vents.length > 0 && rand() < 0.35) {
-      return {
-        action: "VENT",
-        target: pickFrom(view.vents) ?? undefined,
-        reasoning: "reposition unseen",
-      };
-    }
     return { action: "MOVE", target: pickValid(), reasoning: "reposition quietly" };
-  }
-
-  // Crew: fix a live hazard first, then act on whatever they are standing at.
-  // This is ordinary-player behaviour, not a coordinator: stand on the scanner
-  // you have reached, and when heading over, pick one that is still open — if
-  // both are open, a stable hash of the agent key splits the crew rather than
-  // sending everyone to the same pad. Two people can still pile onto one
-  // scanner and lose the reactor, exactly as they can in the real game.
-  const fix = ready("FIX");
-  if (fix)
-    return {
-      action: "INTERACT",
-      target: fix.id,
-      interaction_type: "FIX",
-      reasoning: "the hazard needs fixing now",
-    };
-  if (view.sabotage && rand() < 0.85) {
-    const pads = view.sabotage.fixPois;
-    const open = pads.filter((p) => !p.held);
-    const pick = open.length > 0 ? open[agentHash(view.self.key) % open.length] : pads[0];
-    return {
-      action: "MOVE",
-      target: pick?.id ?? view.sabotage.fixPoiId,
-      reasoning: "head to the repair panel",
-    };
   }
 
   const task = ready("TASK");
@@ -487,6 +427,32 @@ export function heuristicIntent(view: WorldView, rand: () => number): Intent {
       interaction_type: "REPORT",
       reasoning: "a body needs reporting",
     };
+
+  // A real lead at the beacon becomes a meeting: the crewmate presses the
+  // button and puts its read to the room. The engine referees the press like
+  // any other interaction — distance, line of sight, and the 45s lockout
+  // after every meeting — and only a crew with an actual suspicion bothers.
+  const beacon = view.interactables.find((i) => i.type === "EMERGENCY");
+  if (beacon?.in_range && view.lead && rand() < 0.5) {
+    return {
+      action: "INTERACT",
+      target: beacon.id,
+      interaction_type: "EMERGENCY",
+      reasoning: `put my read on ${view.lead} to the room`,
+    };
+  }
+  if (view.lead) {
+    // Walk to the beacon when it is not on hand: straight to the button when
+    // this agent is already in Cafeteria but out of reach, or across the
+    // station from anywhere else. Probabilistic, so a lead never fully derails
+    // the task list.
+    if (!beacon && rand() < 0.15) {
+      return { action: "MOVE", target: "emergency", reasoning: "raise my suspicion at the beacon" };
+    }
+    if (beacon && !beacon.in_range && beacon.status === "ready" && rand() < 0.4) {
+      return { action: "MOVE", target: beacon.id, reasoning: "get within reach of the beacon" };
+    }
+  }
 
   // Crew that drift alone get picked off, and pairs are how bodies get found:
   // when nobody is in sight, sometimes regroup toward the last person the

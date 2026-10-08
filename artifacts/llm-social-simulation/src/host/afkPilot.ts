@@ -53,7 +53,6 @@ export class AfkPilot {
   private seenMeeting = -1;
   private voteDelay = 0;
 
-  private sabotageAt = 0;
   private targetKey: string | null = null;
   private targetAt = 0;
   private killAt = 0;
@@ -143,12 +142,9 @@ export class AfkPilot {
     }
 
     // --- impostor: run the traitor playbook ------------------------------
+    // (No sabotage trigger: with venting and sabotage removed, the playbook
+    //  is kill, alibi, and blend in.)
     if (me.role === "imposter") {
-      if (!e.sabotage && e.sabotageCooldown <= 0 && e.time >= this.sabotageAt) {
-        e.triggerSabotage();
-        this.sabotageAt = e.time + 35;
-      }
-
       if (me.killCooldown <= 0) {
         if (this.targetKey === null || e.time >= this.targetAt) {
           this.targetKey = this.pickKillTarget(e);

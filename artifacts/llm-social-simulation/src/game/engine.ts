@@ -58,7 +58,6 @@ import {
   createImposters,
   imposterGotoPoint,
   imposterHalt,
-  imposterSeekVent,
   updateImposter,
   type Imposter,
 } from "./imposter";
@@ -200,6 +199,14 @@ const RAW_JSON_MAX = 18;
  * confessional is short and the audience wants the arc, not just the last line.
  */
 const CONFESSIONAL_MAX = 36;
+/**
+ * The crew channel never drains below this. The panel's whole point is the
+ * gap between the candid and the covering channel, so a late-game run of
+ * pure traitor cover stories must never crowd the crew's thoughts out
+ * entirely — above the floor, the oldest candid entry still goes first so
+ * an ejected liar's covers stay on the record.
+ */
+const CONFESSIONAL_CANDID_FLOOR = 6;
 
 /**
  * One row of the per-agent confessional: what an agent was *really* thinking
@@ -1634,11 +1641,10 @@ export class GameEngine {
       reasoning: d.reasoning,
     }));
 
-    const fixPoiId = this.sabotage?.fixPoiIds[0] ?? "";
-    const fixPoi = this.map.pointsOfInterest.find((p) => p.id === fixPoiId);
-    // `held` is from everyone else's point of view, so an agent can tell on its
-    // own whether the second scanner already has someone on it.
-    const holders = this.sabotage ? this.sabotageHolders(a) : new Map<string, Actor[]>();
+    // The agent's strongest current lead, if any: the name only, never a
+    // score. It drives the offline heuristic's emergency-beacon choice and is
+    // deliberately left out of the model prompt (`summarise` never sees it).
+    const lead = topSuspect(a.mind);
 
     return {
       self: {
@@ -1666,7 +1672,6 @@ export class GameEngine {
         done: t.done,
       })),
       consoles,
-      vents: this.map.pointsOfInterest.filter((p) => p.kind === "vent").map((p) => p.id),
       interactables: this.buildInteractables(a, zone),
       system_message: feedback,
       others,
@@ -1687,23 +1692,8 @@ export class GameEngine {
         lines: mm.lines,
         ejected: mm.ejected ? `${mm.ejected.name} (${mm.ejected.role})` : null,
       })),
-      sabotage: this.sabotage && fixPoi
-        ? {
-            kind: this.sabotage.kind,
-            secondsLeft: this.sabotage.secondsLeft,
-            fixPoiId,
-            fixRoomId: fixPoi.roomId,
-            fixPois: this.sabotage.fixPoiIds.map((id) => {
-              const poi = this.map.pointsOfInterest.find((p) => p.id === id);
-              return {
-                id,
-                roomId: (poi?.roomId ?? fixPoi.roomId) as RoomId,
-                held: (holders.get(id)?.length ?? 0) > 0,
-              };
-            }),
-          }
-        : null,
-      cooldowns: { kill: a.killCooldown, sabotage: this.sabotageCooldown },
+      lead: lead ? (this.names[lead.key] ?? lead.key) : null,
+      cooldowns: { kill: a.killCooldown },
       // Sight, not omniscience: only a body this agent can currently see counts.
       bodyOutstanding: this.bodies.some((b) => this.visible(a, b.x, b.y)),
       taskProgress: taskBarFraction({ total: this.taskTotal, complete: this.taskComplete }),
@@ -1756,6 +1746,19 @@ export class GameEngine {
       if (a.bodyToReport !== null) {
         const body = this.bodies.find((b) => b.id === a.bodyToReport);
         if (body && this.inInteractRange(a, body.x, body.y)) return true;
+      }
+      // Standing at a ready beacon with a real lead is worth deciding about
+      // promptly: that is when the agent calls its emergency meeting.
+      const beacon = this.map.pointsOfInterest.find((p) => p.kind === "emergency");
+      if (
+        beacon &&
+        this.sabotage?.kind !== "meltdown" &&
+        this.emergencyCooldown <= 0 &&
+        topSuspect(a.mind) !== null &&
+        this.inInteractRange(a, beacon.x, beacon.y) &&
+        this.los(a.entity.x, a.entity.y, beacon.x, beacon.y)
+      ) {
+        return true;
       }
       return false;
     }
@@ -1850,7 +1853,7 @@ export class GameEngine {
 
   /**
    * Resolve a `MOVE` target exactly as the agent expressed it: a point of
-   * interest id ("task_medbay", a repair panel, a vent), a body id, an actor
+   * interest id ("task_medbay", the emergency beacon), a body id, an actor
    * (key or name), or a zone. The engine walks the agent to what it named —
    * it never substitutes its own destination for the one the agent chose.
    */
@@ -1887,7 +1890,8 @@ export class GameEngine {
    * interaction. `MOVE` is executed exactly as the agent expressed it — the
    * engine resolves the named destination and lets A* walk the sprite there,
    * without substituting its own goal; `INTERACT` is refused or executed by
-   * the engine referee; `VENT` and `SABOTAGE` are the traitor's abilities.
+   * the engine referee. There is no `VENT` or `SABOTAGE` branch: those
+   * abilities were removed from the AI vocabulary and nothing can trigger them.
    */
   private applyIntent(a: Actor, intent: Intent, source: ThoughtSource = "heuristic"): void {
     if (intent.action === "INTERACT") {
@@ -1910,35 +1914,11 @@ export class GameEngine {
       return;
     }
 
-    if (intent.action === "SABOTAGE") {
-      if (a.role === "imposter") {
-        this.recordDecision(a, "Sabotage the station to split the crew", "Triggered a sabotage", intent.reasoning, source);
-        this.triggerSabotage();
-      }
-      return;
-    }
-
-    if (intent.action === "VENT") {
-      if (a.kind !== "imposter") return;
-      const imp = a.entity as Imposter;
-      const requested =
-        intent.target &&
-        this.map.pointsOfInterest.some((p) => p.id === intent.target && p.kind === "vent")
-          ? intent.target
-          : null;
-      const vent = requested ?? nearestPoi(this.map, "vent", imp.x, imp.y)?.id ?? null;
-      if (vent) {
-        this.recordDecision(a, "Slip into a vent to travel unseen", "Headed for a vent", intent.reasoning, source);
-        imposterSeekVent(imp, this.map, this.grid, vent);
-      }
-      return;
-    }
-
     // --- MOVE: executed exactly as the agent expressed it -----------------
     const dest = this.resolveMoveTarget(intent.target);
     if (!dest) {
       // The agent named something that does not exist; explain on its next turn.
-      a.actionFeedback = `Action Failed: there is nothing called '${intent.target}' to walk to. Name a zone, a player, or an object (console, panel, vent, body).`;
+      a.actionFeedback = `Action Failed: there is nothing called '${intent.target}' to walk to. Name a zone, a player, or an object (console, beacon, body).`;
       return;
     }
     const label =
@@ -2048,10 +2028,16 @@ export class GameEngine {
     // The confessional is capped, but the traitors' cover stories are the
     // reason it exists: evict the oldest *candid* entry first so a liar nobody
     // can hear any more (because the crew caught and ejected it) still leaves
-    // its thoughts on the record. Only an all-cover buffer evicts the oldest.
+    // its thoughts on the record. Once that would drain the crew channel to
+    // `CONFESSIONAL_CANDID_FLOOR`, covers start going instead — both channels
+    // have to stay on screen for the panel to mean anything.
     if (this.confessional.length > CONFESSIONAL_MAX) {
-      const candid = this.confessional.findIndex((c) => !c.concealing);
-      this.confessional.splice(candid >= 0 ? candid : 0, 1);
+      const candidCount = this.confessional.reduce((n, c) => n + (c.concealing ? 0 : 1), 0);
+      const evict =
+        candidCount > CONFESSIONAL_CANDID_FLOOR
+          ? this.confessional.findIndex((c) => !c.concealing)
+          : this.confessional.findIndex((c) => c.concealing);
+      this.confessional.splice(evict >= 0 ? evict : 0, 1);
     }
   }
 

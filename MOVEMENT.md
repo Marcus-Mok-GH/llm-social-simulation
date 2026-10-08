@@ -49,8 +49,9 @@ kept out of the prompt entirely.
   is off cooldown, since the ready window is too short to burn on a lull. Crew
   re-decide every 10–16s.
 - An agent that is already mid-task is **not** interrupted (re-pathing a crewmate
-  that is standing at its console would cancel the work); a live sabotage is the
-  one exception.
+  that is standing at its console would cancel the work); the engine keeps a
+  live-sabotage exception in code for the headless checks, though nothing can
+  trigger a sabotage in play any more.
 - An agent chasing a body to report keeps that goal until it is close enough to
   touch, then falls through so it can emit `REPORT`.
 
@@ -64,8 +65,10 @@ never contains anything outside the agent's line of sight.
   unseen players have no entry, no live position, room or isolation number.
   `isolation` is judged from the observer's own view, and `bodyOutstanding` is
   true only for a body the agent itself can see right now.
-- plus `current_time`, `interactables`, `suspicion`, `recentMemory`, cooldowns,
-  sabotage state and any `system_message`.
+- plus `current_time`, `interactables`, memory, cooldowns, the agent's current
+  `lead` (its strongest suspicion, name only — used by the offline heuristic to
+  decide about the beacon, never serialized into a model prompt), and any
+  `system_message`.
 
 ## 3. The model picks a destination zone (`src/ai/decision.ts`)
 
@@ -109,14 +112,13 @@ The chosen world point is resolved with **A\*** over a navigation grid:
 
 ## 6. Two special cases
 
-- **`VENT`** (imposter only): `imposterSeekVent` walks the imposter to a vent,
-  then after `VENT_TRAVEL` (1.2s) it is teleported to a *different* vent — the
-  fast-travel payoff. Venting is witness-safe by design: trips are only planned
-  when nobody is in the imposter's sight, the engine re-checks on every tick and
-  the trip is aborted at the grate if someone has walked into view, and
-  perception only brands a *witnessed act* (climbing in or sitting in the pipe)
-  — never mere proximity to a grate.
-- **Teleports** (meeting seating, vent travel) relocate actors directly, so
+- **`VENT` — removed.** No agent can enter a vent any more: the intent was
+  deleted from the model vocabulary, the heuristic never emits it, and the
+  idle imposter planner no longer starts a trip. The travel states
+  (`seeking_vent` / `venting`) survive only so the headless renderer's deck
+  check can still drive them.
+- **Teleports** (meeting seating; vent travel only when a check drives it)
+  relocate actors directly, so
   anything that moves an actor must land it on walkable space — the engine uses
   `seatAt` / `nearestStandable` and keeps a safety-net snap for this.
 

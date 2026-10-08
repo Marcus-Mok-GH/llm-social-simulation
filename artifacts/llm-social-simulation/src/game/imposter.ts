@@ -4,9 +4,11 @@ import { findPath, followPath, type NavGrid } from "./navigation";
 
 /**
  * Imposter behaviour is intentionally distinct from crewmates: they never run
- * real tasks, they fake work at consoles for an alibi, and they use the map's
- * vent POIs to travel quickly. Kill resolution, sabotage and perception live
- * in `engine.ts` — this module only owns *movement*.
+ * real tasks, they fake work at consoles for an alibi. Kill resolution and
+ * perception live in `engine.ts` — this module only owns *movement*. Vent
+ * travel was removed from the behaviour with the saboteur's toolkit: nothing
+ * starts a trip any more (the travel states remain only for the headless
+ * renderer's deck check).
  */
 export type ImposterState = "idle" | "walking" | "faking" | "seeking_vent" | "venting";
 
@@ -50,8 +52,6 @@ export const IMPOSTER_SPEED = 230;
 const IDLE_MIN = 0.3;
 const IDLE_MAX = 0.9;
 const VENT_TRAVEL = 1.2;
-/** Chance an idle imposter repositions through the ducts instead of faking. */
-const VENT_PROB = 0.3;
 /** How long an imposter lingers at a console pretending to work. */
 export const FAKE_DURATION = 4.5;
 
@@ -77,26 +77,6 @@ function pickVent(map: GameMap, imp: Imposter): PointOfInterest | null {
   const candidates = vents.filter((v) => v.id !== imp.targetPoiId);
   const pool = candidates.length > 0 ? candidates : vents;
   return pool[Math.floor(rand(imp) * pool.length)];
-}
-
-/** Nearest vent to the imposter (optionally excluding one). */
-function nearestVent(
-  map: GameMap,
-  imp: Imposter,
-  excludeId: string | null,
-): PointOfInterest | null {
-  const vents = ventPois(map).filter((v) => v.id !== excludeId);
-  const pool = vents.length > 0 ? vents : ventPois(map);
-  let best: PointOfInterest | null = null;
-  let bestDist = Infinity;
-  for (const v of pool) {
-    const d = Math.hypot(v.x - imp.x, v.y - imp.y);
-    if (d < bestDist) {
-      bestDist = d;
-      best = v;
-    }
-  }
-  return best;
 }
 
 function pathTo(imp: Imposter, grid: NavGrid, to: Vec2): boolean {
@@ -157,16 +137,6 @@ function goIdle(imp: Imposter): void {
   imp.blockRetries = 0;
 }
 
-function startVentTrip(imp: Imposter, map: GameMap, grid: NavGrid): boolean {
-  const vent = nearestVent(map, imp, imp.lastVentId);
-  if (!vent) return false;
-  if (!pathTo(imp, grid, { x: vent.x, y: vent.y })) return false;
-
-  imp.targetPoiId = vent.id;
-  imp.state = "seeking_vent";
-  return true;
-}
-
 /** Pick a random console and walk to it to fake work (the alibi). */
 function pickAlibiConsole(imp: Imposter, map: GameMap, grid: NavGrid): boolean {
   const consoles = map.pointsOfInterest.filter((p) => p.kind === "task");
@@ -175,12 +145,11 @@ function pickAlibiConsole(imp: Imposter, map: GameMap, grid: NavGrid): boolean {
   return imposterFakeTask(imp, map, grid, poi.id);
 }
 
-function decide(imp: Imposter, map: GameMap, grid: NavGrid, canVent: boolean): void {
-  // Idle gaps look innocent: mostly fake work at a console, and only slip
-  // through a vent when nobody is around to see it. No lock-on pursuit —
-  // stalking is gone.
-  if (rand(imp) > VENT_PROB && pickAlibiConsole(imp, map, grid)) return;
-  if (canVent && startVentTrip(imp, map, grid)) return;
+function decide(imp: Imposter, map: GameMap, grid: NavGrid): void {
+  // Idle gaps look innocent: fake work at a console. Vent travel was removed
+  // along with the saboteur's toolkit — nothing initiates a trip any more.
+  // No lock-on pursuit either — stalking is gone.
+  if (pickAlibiConsole(imp, map, grid)) return;
   goIdle(imp);
 }
 
@@ -338,8 +307,9 @@ export function imposterHalt(imp: Imposter): void {
 
 /**
  * Advance one imposter by one tick. `canVent` is the engine's read of "no crew
- * is in this imposter's sight" — venting under someone's eyes is a confession,
- * so idle vent trips only happen when the coast is clear.
+ * is in this imposter's sight"; it now only guards the vent-travel machinery
+ * that the headless checks still drive — no idle planner starts a trip any
+ * more, because no agent can vent.
  */
 export function updateImposter(
   map: GameMap,
@@ -351,7 +321,7 @@ export function updateImposter(
   switch (imp.state) {
     case "idle": {
       imp.timer -= dt;
-      if (imp.timer <= 0) decide(imp, map, grid, canVent);
+      if (imp.timer <= 0) decide(imp, map, grid);
       break;
     }
     case "seeking_vent":
