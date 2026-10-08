@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { UMBRA_DECK_MAP } from "@/game/map";
-import { isMovementKey } from "@/game/input";
 import type { Snapshot } from "@/game/engine";
 import {
   LocalGameLink,
@@ -13,11 +12,9 @@ import { drawMap } from "@/game/render/renderMap";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Confessional } from "./Confessional";
 import { Broadcast } from "./Broadcast";
-import { GameHud, TaskRail } from "./GameHud";
+import { GameHud } from "./GameHud";
 import { Briefing, EndScreen, type RosterRow } from "./GameOverlays";
 import { MeetingOverlay } from "./MeetingOverlay";
-import { TaskModal } from "./TaskModal";
-import { TouchControls } from "./TouchControls";
 import { clearSpeech, loadVoiceEnabled, saveVoiceEnabled, speakLine } from "./voice";
 import { cn } from "@/lib/utils";
 
@@ -211,59 +208,16 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
   }, [link, sync]);
 
   // --- keyboard ------------------------------------------------------------
-  useEffect(() => {
-    const typing = (target: EventTarget | null): boolean => {
-      const el = target as HTMLElement | null;
-      return Boolean(el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA"));
-    };
+  // There is no keyboard to play with: the stage is a viewer. The engine
+  // still accepts input (the headless checks drive it directly), but nothing
+  // in this UI hands the human body a control anymore.
 
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (typing(e.target)) return;
-      const key = e.key.toLowerCase();
-
-      if (isMovementKey(key)) {
-        // Hand back to the keyboard: drop the stick so a released thumb can't
-        // resume driving the player once the key comes up. Only movement keys
-        // do this — pressing `e` or Shift must not stop a held joystick.
-        link.touchMove = null;
-        link.setKey(key, true);
-        e.preventDefault();
-        return;
-      }
-      if (key === "e") {
-        link.setKey("e", true);
-        if (!e.repeat) link.interact();
-        return;
-      }
-      if (key === " ") {
-        link.setKey(" ", true);
-        if (!e.repeat) link.kill();
-        e.preventDefault();
-        return;
-      }
-      if (key === "r" && !e.repeat) link.report();
-      if (key === "q" && !e.repeat) link.sabotage();
-    };
-
-    const onKeyUp = (e: KeyboardEvent) => link.setKey(e.key.toLowerCase(), false);
-    const onBlur = () => link.clearKeys();
-
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", onBlur);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", onBlur);
-    };
-  }, [link]);
-
-  const restart = (asImposter: boolean) => {
+  const restart = () => {
     // Local: a fresh engine re-reads the ledger, so the grudges this match
     // just banked are already in the next roster's heads. Remote: the host
-    // builds the next shift server-side (with the role just asked for) and
-    // the next state frame shows its briefing.
-    link.restart(asImposter);
+    // builds the next shift server-side and the next state frame shows its
+    // briefing. Either way the traitors are re-drawn at random.
+    link.restart();
     setSnap(link.snapshot());
     setAnalyst(link.analyst);
     setConfessionalOpen(false);
@@ -391,37 +345,18 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
                 sync();
               }}
               spectator={snap.spectator}
-              onToggleSpectate={() => {
-                link.enterSpectator();
-                sync();
-              }}
             />
           </div>
-
-          {/* The player's task list sits beside the deck on desktop so it
-              never covers the map; phones keep the collapsible HUD chip. */}
-          {!isMobile && (
-            <TaskRail tasks={snap.tasks} isImposter={snap.role === "imposter"} />
-          )}
         </div>
-
-        {isMobile &&
-          snap.phase === "playing" &&
-          !snap.spectator &&
-          !snap.meeting &&
-          !snap.activeTask && <TouchControls link={link} snap={snap} onAction={sync} />}
 
         {snap.phase === "briefing" && (
           <Briefing
-            role={snap.role}
             roster={roster}
             legacy={snap.legacy}
             compact={isMobile}
-            onStart={() => {
-              link.begin();
-              sync();
-            }}
-            onSpectate={() => {
+            onWatch={() => {
+              // Every shift is watched, never played: straight into spectator
+              // mode, full deck vision, the AI cast on its own.
               link.begin(true);
               sync();
             }}
@@ -442,22 +377,6 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
             }}
             onAdvance={() => {
               link.advanceMeeting();
-              sync();
-            }}
-          />
-        )}
-
-        {snap.activeTask && (
-          <TaskModal
-            label={snap.activeTask.label}
-            room={snap.activeTask.room}
-            kind={snap.activeTask.kind}
-            onComplete={() => {
-              link.completeTask();
-              sync();
-            }}
-            onFail={() => {
-              link.failTask();
               sync();
             }}
           />

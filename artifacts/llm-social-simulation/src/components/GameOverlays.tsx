@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { BookOpen, ChevronDown, Ghost, History, Quote, Rocket, Skull, Trophy } from "lucide-react";
+import { BookOpen, ChevronDown, History, Play, Quote, Rocket, Skull, Trophy } from "lucide-react";
 import type { LegacyView, Snapshot } from "@/game/engine";
 import { describeMatch, type MatchRecord } from "@/game/persistence";
 import { buildRecap, type Recap, type RecapBeat } from "@/game/recap";
@@ -22,27 +22,27 @@ export interface RosterRow {
 }
 
 interface BriefingProps {
-  role: "crew" | "imposter";
   roster: RosterRow[];
   /** Cross-match grudges carried in from previous shifts, if any. */
   legacy?: LegacyView | null;
-  /** Show touch control hints instead of the keyboard legend. */
+  /** Narrow layout: shorter copy in the pre-roll. */
   compact?: boolean;
-  onStart: () => void;
-  /** Start the match as a spectator: no avatar, full vision, AI only. */
-  onSpectate: () => void;
+  /** Start the shift as a viewer: full deck vision, AI cast only. */
+  onWatch: () => void;
 }
 
-/** Pre-match role reveal: who you are, who else is on the deck. */
+/**
+ * The pre-shift card. There is no seat to take any more — the deck is cast,
+ * the traitors are drawn at random, and the only way in is to watch.
+ */
 export function Briefing({
-  role,
   roster,
   legacy = null,
   compact = false,
-  onStart,
-  onSpectate,
+  onWatch,
 }: BriefingProps) {
-  const imposter = role === "imposter";
+  // Only the AI cast is on the deck — your seat is the gallery.
+  const cast = roster.filter((r) => !r.isPlayer);
   // Only the agents that actually walked in carrying something are worth
   // listing — the roster above already covers everyone else.
   const grudges = (legacy?.agents ?? []).filter((a) => a.grudges.length > 0);
@@ -56,35 +56,27 @@ export function Briefing({
       >
         <p className="text-[11px] tracking-[0.3em] text-slate-500">UMBRA STATION · DECK K7</p>
         <h2 className="mt-3 font-display text-3xl font-black text-white">
-          You are{" "}
-          <span className={imposter ? "text-[#ff5a6e]" : "text-signal"}>
-            {imposter ? "an IMPOSTER" : "CREW"}
-          </span>
+          The deck is <span className="text-signal">set</span>
         </h2>
         <p className="mx-auto mt-3 max-w-sm text-sm leading-relaxed text-slate-400">
-          {imposter
-            ? "Blend in, fake tasks, and eliminate the crew without being seen. You have one ally on the deck — but the crew doesn't know who."
-            : "Finish the station tasks and work out which of the AI crew are imposters. You only see what is in front of you."}
+          {cast.length} AIs take the seats this shift — crewmates and hidden
+          impostors, the traitors drawn at random from the cast before every
+          match. You watch from the gallery with full deck vision, and the
+          moment the shift starts every private thought is unlocked.
         </p>
 
         <ul className="mt-5 flex flex-wrap justify-center gap-2">
-          {roster.map((r) => (
+          {cast.map((r) => (
             <li
               key={r.key}
               title={r.model ?? undefined}
-              className={cn(
-                "flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] tracking-wider",
-                r.isPlayer
-                  ? "border-signal/50 bg-signal/10 text-signal"
-                  : "border-void-700 bg-void-950/70 text-slate-400",
-              )}
+              className="flex items-center gap-2 rounded-full border border-void-700 bg-void-950/70 px-3 py-1 text-[11px] tracking-wider text-slate-400"
             >
               <span
                 className="h-2.5 w-2.5 rounded-full"
                 style={{ backgroundColor: r.color }}
               />
               {r.name}
-              {r.isPlayer ? " (you)" : ""}
             </li>
           ))}
         </ul>
@@ -121,25 +113,17 @@ export function Briefing({
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
           <button
             type="button"
-            onClick={onStart}
+            onClick={onWatch}
             className="inline-flex items-center gap-2 rounded-lg bg-signal px-6 py-3 text-sm font-bold tracking-wider text-void-950 transition hover:bg-signal/90"
           >
-            <Rocket className="h-4 w-4" />
-            BEGIN SHIFT
-          </button>
-          <button
-            type="button"
-            onClick={onSpectate}
-            className="inline-flex items-center gap-2 rounded-lg border border-[#a78bfa]/50 bg-[#a78bfa]/10 px-5 py-3 text-sm font-bold tracking-wider text-[#c4b5fd] transition hover:bg-[#a78bfa]/20"
-          >
-            <Ghost className="h-4 w-4" />
-            SPECTATE
+            <Play className="h-4 w-4" />
+            SPECTATE THE SHIFT
           </button>
         </div>
-        <p className="mt-3 text-[10px] tracking-widest text-slate-600">
+        <p className="mt-3 text-[10px] leading-relaxed tracking-widest text-slate-600">
           {compact
-            ? "DRAG THE STICK TO MOVE · USE INTERACTS · TAP REPORT"
-            : "WASD / ARROWS MOVE · E INTERACT · R REPORT"}
+            ? "YOU WATCH · THE AIs PLAY · TRAITORS DRAWN AT RANDOM"
+            : "YOU SPECTATE · THE AIs PLAY · TRAITORS DRAWN AT RANDOM EACH SHIFT"}
         </p>
       </motion.div>
     </div>
@@ -149,7 +133,8 @@ export function Briefing({
 interface EndScreenProps {
   snap: Snapshot;
   history: MatchRecord[];
-  onRestart: (asImposter: boolean) => void;
+  /** Build the next shift: a fresh random draw of who the traitors are. */
+  onRestart: () => void;
 }
 
 /** Colour for a recap beat's tag, by how the beat should feel. */
@@ -291,9 +276,16 @@ export function EndScreen({ snap, history, onRestart }: EndScreenProps) {
 
         <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
           {[
-            { label: "TASKS", value: `${snap.tasks.filter((t) => t.done).length}/${snap.tasks.length || "—"}` },
+            { label: "TASK BAR", value: `${Math.round((snap.taskProgress || 0) * 100)}%` },
             { label: "MEETINGS", value: String(snap.meetings) },
-            { label: "YOUR ROLE", value: snap.role === "crew" ? "CREW" : "IMPOSTER" },
+            {
+              label: "YOUR SEAT",
+              value: snap.spectator
+                ? "GALLERY"
+                : snap.role === "crew"
+                  ? "CREW"
+                  : "IMPOSTER",
+            },
             { label: "EJECTED", value: String(snap.ejects) },
           ].map((s) => (
             <div
@@ -319,23 +311,18 @@ export function EndScreen({ snap, history, onRestart }: EndScreenProps) {
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <button
             type="button"
-            onClick={() => onRestart(false)}
-            className="rounded-lg bg-signal px-5 py-2.5 text-sm font-bold tracking-wider text-void-950 transition hover:bg-signal/90"
+            onClick={onRestart}
+            className="inline-flex items-center gap-2 rounded-lg bg-signal px-5 py-2.5 text-sm font-bold tracking-wider text-void-950 transition hover:bg-signal/90"
           >
-            PLAY AS CREW
-          </button>
-          <button
-            type="button"
-            onClick={() => onRestart(true)}
-            className="rounded-lg border border-[#ff4d6a]/60 bg-[#ff4d6a]/10 px-5 py-2.5 text-sm font-bold tracking-wider text-[#ff8a9c] transition hover:bg-[#ff4d6a]/20"
-          >
-            PLAY AS IMPOSTER
+            <Rocket className="h-4 w-4" />
+            NEXT SHIFT
           </button>
         </div>
 
         <p className="mt-4 text-center text-[10px] leading-relaxed text-slate-600">
-          Match saved to local history with the full transcript and every agent's
-          suspicion snapshot.
+          The next shift re-draws which AIs are the traitors. Match saved to
+          local history with the full transcript and every agent's suspicion
+          snapshot.
         </p>
       </motion.div>
     </div>

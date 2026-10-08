@@ -326,8 +326,10 @@ export class RemoteGameLink implements GameLink {
     this.post({ type: "analyst", on });
   }
 
-  restart(asImposter: boolean): void {
-    this.post({ type: "restart", asImposter });
+  restart(): void {
+    // The gallery never plays, so the next shift is cast for the AIs alone:
+    // the host re-draws which of them are the traitors.
+    this.post({ type: "restart", asImposter: false });
   }
 
   get taskOpen(): boolean {

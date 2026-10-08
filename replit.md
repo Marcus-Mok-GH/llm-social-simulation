@@ -1,10 +1,12 @@
 # Umbra Station — LLM Social Simulation
 
-A browser-playable social-deduction game where the other players are LLM-driven
-agents. A human crew member moves around a space station with fog-of-war vision,
-runs task minigames, reports bodies, and argues in meetings while AI agents
-perceive, remember, reason, lie and vote. Built as a demonstration of
-LLM-driven social simulation rather than scripted state machines.
+A social-deduction match you *spectate*, where every player is an LLM-driven
+agent. Six AIs move around a space station with fog-of-war vision, run tasks,
+report bodies, and argue in meetings — perceiving, remembering, reasoning,
+lying and voting, with the traitors drawn at random from the cast before every
+shift. You watch from the gallery: no seat, no controls. Built as a
+demonstration of LLM-driven social simulation rather than scripted state
+machines.
 
 ## Run & Operate
 
@@ -97,9 +99,10 @@ Environment:
   heuristic, so the game never stalls waiting for a model.
 - **The match lives on the server, not in the tab.** The host owns the engine
   and ticks it whether or not anyone watches; the browser is an SSE viewer
-  whose input rides back as POSTs. Closing the tab frees the player seat (the
-  AFK pilot takes the body), and the same session reconnecting reclaims it on
-  the same shift — which is also why cross-match learning moved server-side
+  whose few controls (begin-as-spectator, analyst, next shift) ride back as
+  POSTs. Closing the tab merely detaches the viewer — every shift is spectated,
+  so the AIs play it out either way — and the same session reconnecting lands
+  on the same shift, which is also why cross-match learning moved server-side
   into `.data/`, where every shift folds into the ledger whether or not
   anyone saw it end.
 - **The Skeld, credited.** The deck is The Skeld from Among Us (© Innersloth),
@@ -112,9 +115,12 @@ Environment:
 
 ## Product
 
-A single-player social-deduction round: pick a role, work the station, get
-killed or catch the traitor, hold meetings, vote, and see the result written to
-match history with the full transcript and every agent's belief snapshot.
+A spectated social-deduction round: six AIs run the station — crew on tasks,
+hidden impostors lying and killing — and you watch from the gallery with full
+deck vision. The traitors are drawn at random from the cast before every shift
+(never the same pair twice running), the confessional and analyst overlay are
+yours throughout, and every finished shift is written to match history with
+the full transcript and every agent's belief snapshot.
 
 ## User preferences
 

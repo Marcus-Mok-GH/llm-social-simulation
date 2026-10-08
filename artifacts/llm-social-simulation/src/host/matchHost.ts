@@ -70,6 +70,8 @@ export class MatchHost {
   private createdWall = 0;
   private endedWall: number | null = null;
   private nextPlayerIsImposter: boolean;
+  /** The last shift's traitor models — the next shift's draw avoids them. */
+  private lastImposterModels: string[] = [];
   private lastExploredJson: string | null = null;
   private lastExploredSentAt = 0;
 
@@ -95,6 +97,9 @@ export class MatchHost {
       // Local play has always run on the default seed; autonomous shifts vary
       // it so back-to-back matches are not the same story on repeat.
       seed: (Date.now() ^ (this.matchNo * 7919)) >>> 0,
+      // …and every shift re-draws which AIs are the traitors, avoiding the
+      // pair that just played them, so the cast changes match to match.
+      imposterAvoid: this.lastImposterModels,
     });
     this.matchId = `shift-${Date.now().toString(36)}-${this.matchNo}`;
     this.seq = 0;
@@ -123,6 +128,10 @@ export class MatchHost {
       this.ledger = foldMatch(this.ledger, summary);
       this.store.saveLedger(this.ledger);
     }
+    this.lastImposterModels = this.engine.actors
+      .filter((a) => a.role === "imposter")
+      .map((a) => a.cfg?.model)
+      .filter((m): m is string => Boolean(m));
     this.endedWall = Date.now();
     this.broadcast({ type: "record", history: this.history });
   }
@@ -135,7 +144,9 @@ export class MatchHost {
     const e = this.engine;
 
     if (e.phase === "briefing" && now - this.createdWall >= this.autoBeginMs) {
-      e.begin();
+      // Nobody plays any more: every shift opens in spectator mode, so the
+      // gallery is watching (or not) while the six AIs play it out.
+      e.begin(true);
     }
     if (
       e.phase === "ended" &&

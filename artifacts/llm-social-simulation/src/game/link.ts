@@ -96,7 +96,8 @@ export interface GameLink {
   failTask(): void;
   enterSpectator(): void;
   analyst: boolean;
-  restart(asImposter: boolean): void;
+  /** Build the next shift: new seed, new random draw of who the traitors are. */
+  restart(): void;
 
   /** Live peeks used right after an action, before the next snapshot lands. */
   readonly taskOpen: boolean;
@@ -240,12 +241,21 @@ export class LocalGameLink implements GameLink {
     this.engineInstance.analystView = on;
   }
 
-  restart(asImposter: boolean): void {
+  restart(): void {
     // A fresh engine re-reads the ledger, so the grudges this match just banked
-    // are already in the next roster's heads.
-    this.engineInstance = new GameEngine({ playerIsImposter: asImposter });
+    // are already in the next roster's heads — and it re-draws the traitors at
+    // random, avoiding the models that just wore the knife.
+    this.engineInstance = new GameEngine({ imposterAvoid: this.imposterModelsOf() });
     this.wire();
     this.last = 0;
+  }
+
+  /** This shift's imposter models — what the next shift's role draw avoids. */
+  private imposterModelsOf(): string[] {
+    return this.engineInstance.actors
+      .filter((a) => a.role === "imposter")
+      .map((a) => a.cfg?.model)
+      .filter((m): m is string => Boolean(m));
   }
 
   get taskOpen(): boolean {

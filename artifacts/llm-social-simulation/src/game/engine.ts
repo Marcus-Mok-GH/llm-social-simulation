@@ -467,6 +467,12 @@ export interface EngineOptions {
    * survives restarts, while browser-local runs keep reading storage as before.
    */
   legacyLedger?: LegacyLedger;
+  /**
+   * The models that were imposters in the *previous* shift. The new roster
+   * avoids them when the pool is deep enough, so back-to-back matches open
+   * with different AIs holding the knife.
+   */
+  imposterAvoid?: readonly string[];
 }
 
 /** What the UI needs to show who has history with whom. */
@@ -482,6 +488,52 @@ export interface LegacyView {
   }[];
 }
 
+/** Which models play which side this shift. */
+export interface SeatModelDraw {
+  /** The models cast as imposters this shift. */
+  imposters: string[];
+  /** The rest of the pool, cast as honest crew. */
+  crew: string[];
+}
+
+/**
+ * Draw this shift's cast from a provider's model pool.
+ *
+ * `imposterCount` models are picked at random to hold the knife and the rest
+ * run crew, so a traitor model never also plays an honest crewmate *within* a
+ * match — but any model can be a traitor *across* matches, which is what makes
+ * the roles worth watching. `avoid` names the previous shift's traitors: when
+ * the pool is deep enough the draw never repeats them, so no two shifts in a
+ * row open with the same pair under the knife.
+ *
+ * The draw is seeded, so a replayed shift re-casts the same roles; it runs on
+ * its own rng stream, separate from the simulation's, so casting never
+ * disturbs the deterministic sequence `scripts/simulate.ts` replays.
+ */
+export function drawSeatModels(
+  pool: readonly string[],
+  imposterCount: number,
+  avoid: readonly string[] = [],
+  seed = 1,
+): SeatModelDraw {
+  if (pool.length === 0) return { imposters: [], crew: [] };
+
+  const cast = makeRng((seed ^ 0x51ed270b) >>> 0);
+  const order = [...pool];
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = cast.int(i + 1);
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+
+  const fresh = order.filter((m) => !avoid.includes(m));
+  // Too small a pool to dodge last shift's traitors? Draw from everyone.
+  const source = fresh.length >= imposterCount ? fresh : order;
+  const imposters = source.slice(0, Math.max(0, Math.min(imposterCount, source.length)));
+  const crew = order.filter((m) => !imposters.includes(m));
+  // A one-model pool (Berget) plays every role, as it always has.
+  return { imposters, crew: crew.length > 0 ? crew : [...pool] };
+}
+
 // ---------------------------------------------------------------------------
 // Engine
 // ---------------------------------------------------------------------------
@@ -494,6 +546,14 @@ export class GameEngine {
   readonly vis: VisibilityGrid;
   private readonly los: (ax: number, ay: number, bx: number, by: number) => boolean;
   private readonly rng: Rng;
+  /** The seed this shift was built from — drives the role draw as well. */
+  private readonly matchSeed: number;
+  /** Models the previous shift cast as imposters; this shift avoids them. */
+  private readonly imposterAvoid: readonly string[];
+  /** This shift's traitor models, drawn at random from the provider pool. */
+  private imposterSeatModels: string[] = [];
+  /** This shift's crew models — the pool minus whoever drew the knife. */
+  private crewSeatModels: string[] = [];
 
   player!: Player;
   crewmates: Crewmate[] = [];
@@ -603,7 +663,9 @@ export class GameEngine {
     this.zones = buildZoneGraph(this.map);
     this.vis = buildVisibilityGrid(this.map);
     this.los = makeLosTest(this.map);
-    this.rng = makeRng(opts.seed ?? 20260410);
+    this.matchSeed = opts.seed ?? 20260410;
+    this.rng = makeRng(this.matchSeed);
+    this.imposterAvoid = [...(opts.imposterAvoid ?? [])];
     this.llmEnabled = opts.llm ?? true;
     this.provider = activeProvider();
     this.ai = { cfg: null, gate: new RequestGate(300, 3), budget: { remaining: LLM_BUDGET } };
@@ -643,6 +705,10 @@ export class GameEngine {
     this.player.y = playerSeat.y;
 
     const imposterKeys = this.imposters.map((_, i) => `imp:${i}`);
+
+    // Cast this shift's roles before any name is derived: which models wear
+    // the knife is a fresh random draw every match.
+    this.pickSeatModels(this.imposters.length);
 
     // AI agents are named for the model that runs them. If the provider's
     // pool is smaller than the roster (Berget has a single model), repeats
@@ -718,10 +784,10 @@ export class GameEngine {
     // the deck rather than something the match told it.
     this.grudgesByKey.clear();
     if (this.legacy) {
-      const roster = this.actors.map((a) => ({ key: a.key, name: a.name }));
+      const roster = this.actors.map((a) => ({ key: a.key, name: this.identityOf(a) }));
       for (const a of this.actors) {
         if (a.isPlayer) continue;
-        const grudges = seedGrudges(a.mind, a.name, this.legacy, roster);
+        const grudges = seedGrudges(a.mind, this.identityOf(a), this.legacy, roster);
         if (grudges.length > 0) this.grudgesByKey.set(a.key, grudges);
       }
     }
@@ -824,37 +890,41 @@ export class GameEngine {
   }
 
   /**
-   * Bind agent `index` of `role` to its own model from the active provider's
-   * cheap pool. Crew and imposters draw from separate pools: only the
-   * designated traitor models may be imposters, and they never play crew, so
-   * the traitors are the same pair of models every match. Within a pool the
-   * list is walked in order and wrapped only if it runs short.
+   * Draw this shift's cast from the provider's pool: `imposterCount` models
+   * are picked at random to be the traitors, the rest run crew — so a traitor
+   * model never also plays an honest crewmate *within* a match, but any model
+   * can be a traitor *across* matches. The draw avoids last shift's traitors
+   * whenever the pool is deep enough, so no two shifts in a row open with the
+   * same pair under the knife.
+   *
+   * It runs on its own rng stream seeded off the match seed, so casting the
+   * roles never disturbs the deterministic sequence the simulation replays.
+   */
+  private pickSeatModels(imposterCount: number): void {
+    const draw = drawSeatModels(
+      this.provider?.models ?? [],
+      imposterCount,
+      this.imposterAvoid,
+      this.matchSeed,
+    );
+    this.imposterSeatModels = draw.imposters;
+    this.crewSeatModels = draw.crew;
+  }
+
+  /**
+   * Bind agent `index` of `role` to its own model from this shift's cast.
+   * Crew and imposter seats draw from disjoint lists (a traitor model never
+   * also plays honest crew in the same match); within a list the order is
+   * walked in sequence and wrapped only if it runs short.
    */
   private modelFor(
     index: number,
     role: "crew" | "imposter" = "crew",
   ): LlmConfig | null {
     if (!this.provider) return null;
-    const pool = role === "imposter" ? this.imposterModels() : this.crewModels();
+    const pool = role === "imposter" ? this.imposterSeatModels : this.crewSeatModels;
     if (pool.length === 0) return null;
-    const model = pool[index % pool.length];
-    return configFor(this.provider, model);
-  }
-
-  /** Crew models: the provider pool minus the reserved imposter models. */
-  private crewModels(): string[] {
-    if (!this.provider) return [];
-    const reserved = new Set(this.provider.imposterModels);
-    const crewOnly = this.provider.models.filter((m) => !reserved.has(m));
-    return crewOnly.length > 0 ? crewOnly : this.provider.models;
-  }
-
-  /** Imposter models: the designated traitor models, or the pool if none. */
-  private imposterModels(): string[] {
-    if (!this.provider) return [];
-    return this.provider.imposterModels.length > 0
-      ? this.provider.imposterModels
-      : this.provider.models;
+    return configFor(this.provider, pool[index % pool.length]);
   }
 
   /**
@@ -2634,17 +2704,23 @@ export class GameEngine {
     // Bank the ejection with its voters. This is the raw material for next
     // shift's grudges: an innocent who was voted out blames every name on this
     // list, so the ledger can carry the grudge into a match it did not play in.
-    const voters = Object.entries(m.votes)
+    // The bank stores cross-match identities (the model behind the seat),
+    // while the public event timeline below keeps the display names.
+    const voterNames = Object.entries(m.votes)
       .filter(([, target]) => target === ejected.key)
       .map(([key]) => this.names[key] ?? key);
-    this.ejections.push({ name: ejected.name, role: ejected.role, voters });
+    this.ejections.push({
+      name: this.identityOf(ejected),
+      role: ejected.role,
+      voters: voterNames.map((n) => this.identityOfName(n)),
+    });
     this.events.push({
       kind: "eject",
       t: this.time,
       key: ejected.key,
       name: ejected.name,
       role: ejected.role,
-      voters,
+      voters: voterNames,
     });
     this.syncTaskBudget();
 
@@ -3163,6 +3239,23 @@ export class GameEngine {
   // -- cross-match memory --------------------------------------------------
 
   /**
+   * The cross-match identity behind a seat: the model it runs on. Seat labels
+   * ("Minimax M3-2") are display-only, so when a *different* model draws the
+   * twin seat next shift the ledger still recognises every agent on the deck
+   * instead of inventing a fresh one with no record. With no provider, each
+   * seat is its own identity.
+   */
+  private identityOf(a: Actor): string {
+    return a.cfg ? this.modelNameOf(a.cfg) : a.name;
+  }
+
+  /** The same mapping addressed by display name (ejections bank names). */
+  private identityOfName(name: string): string {
+    const actor = this.actors.find((x) => x.name === name);
+    return actor ? this.identityOf(actor) : name;
+  }
+
+  /**
    * The ledger's view of this shift, for the end screen and the briefing: who
    * has played before, and who they still hold a grudge against.
    */
@@ -3173,7 +3266,7 @@ export class GameEngine {
       agents: this.actors
         .filter((a) => !a.isPlayer)
         .map((a) => {
-          const record = this.legacy?.agents[a.name];
+          const record = this.legacy?.agents[this.identityOf(a)];
           return {
             name: a.name,
             games: record?.games ?? 0,
@@ -3195,7 +3288,7 @@ export class GameEngine {
     if (!this.winner) return null;
     return {
       winner: this.winner,
-      roster: this.actors.map((a) => ({ name: a.name, role: a.role })),
+      roster: this.actors.map((a) => ({ name: this.identityOf(a), role: a.role })),
       ejections: [...this.ejections],
     };
   }

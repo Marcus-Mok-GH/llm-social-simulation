@@ -17,8 +17,14 @@ const html = renderToString(<App />);
 const checks: [string, boolean][] = [
   ["renders the station title", html.includes("UMBRA STATION")],
   ["renders the hero", html.includes("Trust no one")],
-  ["renders role reveal", html.includes("BEGIN SHIFT")],
-  ["renders briefed role", html.includes("You are")],
+  ["renders the pre-shift briefing", html.includes("The deck is")],
+  ["offers spectating as the only way in", html.includes("SPECTATE THE SHIFT")],
+  [
+    "offers no way to play",
+    !html.includes("BEGIN SHIFT") &&
+      !html.includes("TAKE THE CREW SEAT") &&
+      !html.includes("WASD"),
+  ],
   ["renders the HUD task bar", html.includes("STATION TASKS")],
   ["renders the per-agent model line", html.includes("different model")],
   ["renders the map legend", html.includes("Task console")],
@@ -85,6 +91,7 @@ const endHtml = renderToString(
 checks.push(
   ["renders the recap panel", endHtml.includes("STORY OF THE SHIFT")],
   ["frames a misplaced vote as a mislynch", endHtml.includes("THE MISLYNCH")],
+  ["offers the next shift, not a role to play", endHtml.includes("NEXT SHIFT") && !endHtml.includes("PLAY AS")],
 );
 let bad = 0;
 for (const [label, ok] of checks) {

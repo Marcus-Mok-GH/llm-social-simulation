@@ -9,10 +9,13 @@
  * next match already watching them. The bias is capped (`MAX_GRUDGE`), so the
  * grudge shades a choice without ever deciding it.
  *
- * Identity across matches is the agent's **name** (the model it runs on, or
+ * Identity across matches is the agent's **model** — the name it runs on (or
  * `AI-1…` in pure heuristic mode), which is exactly the label the audience
- * tracks. Like `persistence.ts`, every storage access is wrapped: a disabled or
- * full `localStorage` degrades this to no-op rather than breaking a match.
+ * tracks. Seat labels like "Minimax M3-2" are display-only: the engine folds
+ * and reads the ledger by the model behind the seat, so a shift where a
+ * *different* model draws the twin seat does not invent a new agent. Like
+ * `persistence.ts`, every storage access is wrapped: a disabled or full
+ * `localStorage` degrades this to no-op rather than breaking a match.
  */
 
 import { seedDistrust, type Mind } from "./perception";
@@ -145,7 +148,14 @@ export function foldMatch(ledger: LegacyLedger, summary: LegacyMatchSummary): Le
     ),
   };
 
+  const counted = new Set<string>();
   for (const row of summary.roster) {
+    // Two seats can run the same model in one shift (the pool can be smaller
+    // than the deck); the summary lists both, but one agent plays one shift —
+    // count each identity + faction once so a twin seat cannot double wins.
+    const countedKey = `${row.name}\u0000${row.role}`;
+    if (counted.has(countedKey)) continue;
+    counted.add(countedKey);
     const agent = ensure(next, row.name);
     agent.games++;
     const onWinningSide =

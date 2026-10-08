@@ -20,6 +20,16 @@ Implemented and playable. Everything from Phases 0-6 below has landed in
 
 The decisions below that differ from this original plan:
 
+- **The viewer never plays.** The shipped UI is spectate-only: every shift
+  starts in spectator mode (full deck vision, the reveal, the confessional
+  open), and the keyboard/touch controls, task modal, meet voting and
+  "play as imposter" restart have been removed from the stage. The engine
+  keeps its play paths — the headless checks (`validate-touch`,
+  `validate-spectator`, `validate-host`) drive them directly.
+- **Imposters are a random draw each shift**, not a designated pair:
+  `drawSeatModels` picks two models from the whole pool per match, avoiding
+  last shift's pair, and keeps them out of that shift's crew pool.
+
 - **Persistence is `localStorage`, not Convex.** The Convex schema stub remains at
   `src/convex/schema.ts`, but nothing depends on a deployed backend, so the game
   works offline and matches are still recorded with full transcripts.

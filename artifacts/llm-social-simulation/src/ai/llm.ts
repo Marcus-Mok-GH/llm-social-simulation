@@ -38,13 +38,12 @@ export interface ProviderConfig {
   baseUrl: string;
   apiKey: string;
   timeoutMs: number;
-  /** Cheap models, in preference order. Distinct agents get distinct models. */
-  models: string[];
   /**
-   * The only models allowed to be imposters. Crew are drawn from `models`
-   * minus these, so a traitor model never also plays an honest crewmate.
+   * Cheap models, in preference order. Every one of them may be cast as crew
+   * *or* imposter: the engine draws the traitors at random from this pool at
+   * the start of each shift, so the cast changes from match to match.
    */
-  imposterModels: string[];
+  models: string[];
 }
 
 /**
@@ -53,12 +52,12 @@ export interface ProviderConfig {
  * models — the game fires up to 150 model calls per match, a frontier model
  * would burn a key's budget, and community models can disappear mid-match.
  *
- * All six are Quest-Pollen eligible (Quest covers only the eligible catalog,
- * unlike paid Pollen which unlocks everything), and each has been verified to
- * answer on `POST /v1/chat/completions` with JSON mode.
+ * All of them are Quest-Pollen eligible (Quest covers only the eligible
+ * catalog, unlike paid Pollen which unlocks everything), and each has been
+ * verified to answer on `POST /v1/chat/completions` with JSON mode.
  *
- * Keep this list >= the number of AI agents (4 crew + 2 imposters) so no two
- * agents share a model.
+ * Roles are drawn from this pool at random every shift — any model can be the
+ * traitor, and the same pair never opens two shifts in a row.
  */
 export const POLLINATIONS_BASE_URL = "https://gen.pollinations.ai/v1";
 export const POLLINATIONS_MODELS = [
@@ -67,17 +66,6 @@ export const POLLINATIONS_MODELS = [
   "minimax/minimax-m3",
   "deepseek/deepseek-v4.1-flash",
   "mistralai/mistral-large-3",
-] as const;
-
-/**
- * The only models the engine is allowed to cast as imposters: GPT-6 Luna and
- * DeepSeek V4.1 Flash. Every other pool model is crew, and these two never
- * play an honest crewmate, so a match's traitors are always the same pair of
- * models. Override with `VITE_POLLINATIONS_IMPOSTER_MODELS`.
- */
-export const POLLINATIONS_IMPOSTER_MODELS = [
-  "openai/gpt-6-luna",
-  "deepseek/deepseek-v4.1-flash",
 ] as const;
 
 /**
@@ -188,10 +176,6 @@ export function readProviders(): ProviderConfig[] {
       apiKey: pollinationsKey,
       timeoutMs,
       models: modelList(readEnv("VITE_POLLINATIONS_MODELS"), POLLINATIONS_MODELS),
-      imposterModels: modelList(
-        readEnv("VITE_POLLINATIONS_IMPOSTER_MODELS"),
-        POLLINATIONS_IMPOSTER_MODELS,
-      ),
     });
   }
 
@@ -211,8 +195,6 @@ export function readProviders(): ProviderConfig[] {
       apiKey: bergetKey,
       timeoutMs,
       models,
-      // Berget has no model pool, so its single model plays every role.
-      imposterModels: models,
     });
   }
 

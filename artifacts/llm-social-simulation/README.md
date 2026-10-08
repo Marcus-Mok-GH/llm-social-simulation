@@ -1,10 +1,12 @@
 # Umbra Station — LLM Social Simulation
 
-A browser-playable social-deduction game where the other players are LLM-driven
-agents. You are one crew member aboard a space station: crew run tasks, hidden
-imposters lie, kill and sabotage. The AI agents are the research subject — they
-**perceive** only what line of sight allows, **remember** it, **reason** about who
-to trust, and **argue and vote** in meetings.
+A social-deduction match you *watch*, where every player is an LLM-driven
+agent. Six AIs hold the seats aboard a space station: crew run tasks, hidden
+imposters lie, kill and sabotage — and the traitors are drawn at random from
+the cast before every shift, a different pair each match. You spectate from the
+gallery. The AI agents are the research subject — they **perceive** only what
+line of sight allows, **remember** it, **reason** about who to trust, and
+**argue and vote** in meetings.
 
 ## What's implemented
 
@@ -12,8 +14,8 @@ to trust, and **argue and vote** in meetings.
 |---|---|
 | Map & renderer | The official Skeld artwork as the deck, Canvas 2D, player-following camera at fixed zoom, A\* navigation grid |
 | **Vision fog** | Ray-cast visibility polygon + persistent "explored" memory, with wall occlusion |
-| Player | WASD movement, wall collision, contextual actions, spectator mode when dead |
-| **Tasks** | Per-agent task lists built to the Among Us docs' job sizes (5 short + 2 long per crewmate), shared station bar, two playable minigames (wiring, calibration) |
+| **Viewer** | Spectating only — full deck vision, analyst overlay, spoken meeting lines and the spoiler-gated confessional. There is no seat to take: the AIs play the whole match |
+| **Tasks** | Per-agent task lists built to the Among Us docs' job sizes (5 short + 2 long per crewmate), shared station bar, two minigame formats (wiring, calibration) |
 | **Interactions** | Agents choose `INTERACT` (`TASK`/`KILL`/`FIX`/`REPORT`/`EMERGENCY`) against objects in their current node; the engine re-checks distance, game state and line of sight, rejects illegal actions and feeds the reason back as `system_message` |
 | **Kills & bodies** | Kill is a validated interaction with a real witness check (line of sight within 230u), corpses, reporting |
 | **Sabotage** | Reactor meltdown (30s, The Skeld's length — both Reactor hand scanners must be held at once by two people; the beacon locks out until it is fixed or a body is reported) and lights out (halves every agent's vision — repaired in Electrical) |
@@ -21,10 +23,10 @@ to trust, and **argue and vote** in meetings.
 | **Belief model** | Per-agent complete match log (every event, sighting, decision and meeting, from start to finish) + suspicion vector with decay, vent sightings, body-room inference |
 | **LLM decision loop** | A configurable OpenAI-compatible provider (Pollinations or Berget) returns validated JSON intents (`MOVE`/`INTERACT`/`VENT`/`SABOTAGE`) and meeting lines; each AI agent runs a **different** model from a cheap-model pool, with heuristic fallback on any failure |
 | **Deception & identification** | Every traitor is handed a persona (wire-puller / provocateur / confidant / ghost) and lies in meetings with structured claims — `accuse`, `vouch`, `alibi`. Every listener weighs a claim against its own memory: an unverifiable smear only shades suspicion, but a claim its own eyes contradict brands the speaker a liar (`caught`) — the crew's way of identifying imposters |
-| **Autonomous station host** | The match runs server-side in the preview process: it starts on its own, keeps ticking with the tab closed (an AFK pilot flies the human body), folds every shift into the cross-match ledger and chains the next one — the browser is a viewer that can close and rejoin |
+| **Autonomous station host** | The match runs server-side in the preview process: it starts on its own, keeps ticking with the tab closed (every shift is spectated, so the six AIs play the whole match), folds every shift into the cross-match ledger and chains the next one — the browser is a viewer that can close and rejoin |
 | **Persistence** | Finished matches, transcripts and every agent's suspicion snapshot saved to `localStorage` in local mode, and to the shared server-side history when the shift runs on the host |
 | **Station log** | Ten consoles ask the crew to *write* a line (a scan readout, an intercept summary, a cargo note) instead of waiting out a timer. Entries are public — every agent can quote them in a meeting — and a traitor writes a cover story |
-| **Confessional** | Every decision and meeting line carries the agent's private thought, one channel underneath the public one. Sealed while you are playing (it spoils the match), legible while spectating or after the verdict |
+| **Confessional** | Every decision and meeting line carries the agent's private thought, one channel underneath the public one. Sealed through the briefing (it spoils the match), legible the moment you are watching |
 | **Cross-match ledger** | Wins, eliminations and grudges survive between shifts. An agent voted out blames every voter and opens the next match already watching them |
 | **Match recap** | A structured timeline of the shift (kills, sabotage, meetings, ejections, verdict) is recorded as it happens and the end screen re-tells it as a short *story of the shift* — a spotlight on the decisive beat (the mislynch, the clean kill), then the full beat sheet and the closing private thought |
 | Analyst view | Optional overlay showing each agent's current top suspect |
@@ -80,30 +82,30 @@ host exploits that — it owns the `GameEngine`, ticks it on a timer, and serves
 the browser as a **viewer**:
 
 - **Autonomous from the first second.** A fresh shift briefs itself, begins
-  after a few seconds whether or not anyone pressed BEGIN, plays to a verdict,
-  writes the record, folds the outcome into the ledger, and builds the next
-  shift. Nothing waits for a client.
+  in spectator mode after a few seconds whether or not anyone is watching,
+  plays to a verdict, writes the record, folds the outcome into the ledger,
+  and builds the next shift — including a fresh random draw of which AIs are
+  the traitors. Nothing waits for a client.
 - **Closing the tab only pauses the viewer.** State flows server → browser as
   SSE frames (`hello` on attach, then `state` at 10 Hz, interpolated to smooth
   motion) and input flows back as small POSTs on `/__umbra/*`. No WebSocket
   upgrade, so it survives the preview proxy; `EventSource` retries on its own.
-- **Rejoin takes your seat back.** The player seat is claimed by a session id
+- **Rejoin lands on the same shift.** The viewer is tracked by a session id
   stored in `localStorage`. The same browser reconnecting to a live shift gets
-  `hello` with the same `matchId`, the same body, and whatever minute the
-  match has reached while you were away. A different browser only watches.
-- **The human body flies itself while you are gone.** With the seat free, an
-  AFK pilot drives the player through the same public surface a human uses
-  (`touchMove`, `setKey`, `interact`, `report`, `playerKill`, `playerVote`) and
-  is bound by the same engine referee — it walks A* routes, holds `e` on a
-  repair panel, works its assigned consoles, reports bodies it reaches, votes
-  its suspicion, and as an impostor closes on the most isolated crew member.
+  `hello` with the same `matchId` and whatever minute the match has reached
+  while you were away; a second browser only watches.
+- **Nobody plays the human body — it isn't on the deck.** Every shift opens in
+  spectator mode, so the player seat departs the roster (the dead-player path)
+  and the six AIs play the match end to end, bound by the same engine referee
+  as always. There is no control surface left for a human to hold.
 - **The learning is server-side.** Every shift — watched or not — folds into
   `.data/ledger.json` (grudges, wins, eliminations) and `.data/matches.json`
   (the shared history), both re-read on host start, so the agents open the
   next match remembering the last one even across a restart.
 - **Nothing hosted? Nothing lost.** If no host answers within five seconds
   (e.g. a static build), the page falls back to the original in-page engine
-  and plays exactly as before — just without cross-tab persistence.
+  and runs the same spectated shift locally — just without cross-tab
+  persistence.
 
 `scripts/validate-host.ts` boots the real thing headlessly and asserts all of
 it: ticking with zero viewers, seat reclaim on rejoin, gallery-only second
@@ -115,17 +117,18 @@ fresh host process.
 The game talks to OpenAI-compatible chat-completions endpoints directly from the
 browser. Two providers are supported and both are CORS-enabled. **Pollinations
 is preferred when its key is present**, and every AI agent is assigned its own
-model from the provider's pool — in the normal 4-crew + 2-imposter match, all six
-AI players are different models. Two of those models are reserved for the
-traitor role: **only GPT-6 Luna and DeepSeek V4.1 Flash can be imposters**, and
-they never play an honest crewmate, so every match's traitors are that pair.
+model from the provider's pool — in the 4-crew + 2-imposter match the crew and
+the traitors never share a model. **The traitors are drawn at random from the
+pool at the start of every shift**: any model can be the imposter, a traitor
+model never also plays honest crew *within* a match, and the draw avoids the
+pair that played them last shift — so no two shifts in a row open with the same
+traitors.
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `POLLINATIONS_API_KEY` / `VITE_POLLINATIONS_API_KEY` | — | Pollinations key (app `pk_` keys are safe for browsers; `sk_` keys are server-only). |
 | `VITE_POLLINATIONS_BASE_URL` | `https://gen.pollinations.ai/v1` | Pollinations endpoint. |
 | `VITE_POLLINATIONS_MODELS` | see below | Comma-separated override for the model pool. |
-| `VITE_POLLINATIONS_IMPOSTER_MODELS` | `openai/gpt-6-luna,deepseek/deepseek-v4.1-flash` | The only models allowed to be imposters. |
 | `BERGET_API_KEY` / `VITE_LLM_API_KEY` | — | Berget key. |
 | `BERGET_BASE_URL` / `VITE_LLM_BASE_URL` | `https://api.berget.ai/v1` | Berget endpoint. |
 | `BERGET_MODEL` / `VITE_LLM_MODEL` | `mistral-small` | Berget model (Berget has no model pool). |
@@ -134,8 +137,8 @@ they never play an honest crewmate, so every match's traitors are that pair.
 
 ### Why these Pollinations models
 
-The pool is six cheap, **official** models — community models are excluded because
-they can vanish mid-match:
+The pool is five cheap, **official** models — community models are excluded
+because they can vanish mid-match:
 
 ```
 openai/gpt-6-luna   nvidia/nemotron-3.5-lightning   minimax/minimax-m3
@@ -148,9 +151,10 @@ Two Pollinations details matter:
   full one. A key with a Quest balance but no paid balance gets
   `402 INSUFFICIENT_BALANCE` on models outside that catalog, which is why every
   model here was picked from the Quest-eligible set.
-- `openai/gpt-6-luna` and `deepseek/deepseek-v4.1-flash` are the designated
-  imposters: the engine hands the traitor role only to those two and keeps them
-  out of the crew pool, so the crew across a match are the other four models.
+- **Any model can be the traitor.** The engine draws two imposters at random
+  from the pool before every shift (avoiding the pair that played them last
+  one), so the traitors rotate match to match — the models that drew the knife
+  are the only ones kept out of that shift's crew pool.
 - A match fires up to 150 model calls, so the whole pool is priced in fractions of
   a Pollen per million tokens. GPT-6 Luna needs JSON mode to answer,
   which the game always requests.
@@ -240,7 +244,8 @@ to it is evidence, and the two sit in the same scroll box.
    thought, and each meeting line carries a `thinking` field the room never
    hears. A crew note is usually just an honest read of the room; a traitor's is
 a cover story, and the panel labels which is which. The gap between the two
-channels is the show — so it stays sealed while you are one of the players.
+channels is the show — sealed through the briefing, open the moment you are
+watching.
 3. **They remember the last shift.** The ledger keeps wins, eliminations and
    grudges between matches, and an innocent who gets voted out blames every name
    on the ballot. Next match they open already watching those agents — a bias

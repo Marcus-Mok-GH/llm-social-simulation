@@ -239,6 +239,11 @@ async function main(): Promise<void> {
     check("the finished shift folds into the ledger", store.loadLedger().shifts === 1);
 
     // The end screen's restart: next shift, human playing the impostor.
+    // Before that, note this shift's traitors — the next draw must avoid them.
+    const prevTraitors = station.host.engine.actors
+      .filter((a) => !a.isPlayer && a.role === "imposter")
+      .map((a) => a.cfg?.model)
+      .filter((m): m is string => Boolean(m));
     await post("tab-a", { type: "restart", asImposter: true });
     await sleep(150);
     const second = await match();
@@ -246,6 +251,18 @@ async function main(): Promise<void> {
     check(
       "restart honours the requested role",
       station.host.engine.playerActor.role === "imposter",
+    );
+    const nextTraitors = station.host.engine.actors
+      .filter((a) => !a.isPlayer && a.role === "imposter")
+      .map((a) => a.cfg?.model)
+      .filter((m): m is string => Boolean(m));
+    check(
+      "the next shift re-draws its traitors — never the pair that just played",
+      // With no model key there are no models to compare; the draw itself is
+      // covered headlessly in validate-imposters.
+      prevTraitors.length === 0 ||
+        (nextTraitors.length > 0 &&
+          nextTraitors.every((m) => !prevTraitors.includes(m))),
     );
     await post("tab-a", { type: "begin" });
     await sleep(80);
@@ -270,6 +287,13 @@ async function main(): Promise<void> {
     check(
       "a new host process starts with the shared history",
       reborn.matchHistory.length === 2,
+    );
+    // The shipped path: nobody clicks anything, the auto-begin fires, and the
+    // shift opens in spectator mode — the gallery never takes a seat.
+    reborn.pump(1 / 60, Date.now() + 60_000);
+    check(
+      "an unattended shift begins in spectator mode",
+      reborn.engine.spectator === true,
     );
     reborn.engine.onMatchEnd = null;
   } finally {

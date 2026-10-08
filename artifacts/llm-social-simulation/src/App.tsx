@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Play, Radio, Swords, Trophy } from "lucide-react";
+import { Play, Radio, Trophy } from "lucide-react";
 import { modelDisplayName, readProviders } from "@/ai/llm";
 import { MAP_LEGEND, POI_LEGEND_COLORS } from "@/game/render/renderMap";
 import { UMBRA_DECK_MAP } from "@/game/map";
@@ -51,26 +51,10 @@ function ProviderStatus() {
   );
 }
 
-/** One cast card: a model, its seat colour, and the role the engine will cast. */
-function CastCard({
-  name,
-  color,
-  traitor,
-}: {
-  name: string;
-  color: string;
-  traitor: boolean;
-}) {
+/** One cast card: a model and its seat colour. Any of them can draw the knife. */
+function CastCard({ name, color }: { name: string; color: string }) {
   return (
-    <li
-      className={cn(
-        "flex items-center gap-3 rounded-xl border px-3 py-2.5 backdrop-blur-sm transition",
-        traitor
-          ? "border-[#ff4d6a]/50 bg-[#ff4d6a]/10 hover:border-[#ff4d6a]/80"
-          : "border-void-700 bg-void-950/70 hover:border-slate-500",
-      )}
-      title={traitor ? "The engine only ever hands the knife to this model" : undefined}
-    >
+    <li className="flex items-center gap-3 rounded-xl border border-void-700 bg-void-950/70 px-3 py-2.5 backdrop-blur-sm transition hover:border-slate-500">
       <span
         className="h-6 w-6 shrink-0 rounded-full border-2 border-void-950"
         style={{ backgroundColor: color }}
@@ -79,13 +63,8 @@ function CastCard({
         <span className="block truncate text-sm font-semibold text-slate-100">
           {name}
         </span>
-        <span
-          className={cn(
-            "block text-[9px] tracking-[0.2em]",
-            traitor ? "text-[#ff8a9c]" : "text-slate-500",
-          )}
-        >
-          {traitor ? "DESIGNATED IMPOSTOR" : "CREW POOL"}
+        <span className="block text-[9px] tracking-[0.2em] text-slate-500">
+          CAST POOL
         </span>
       </span>
     </li>
@@ -150,7 +129,7 @@ const FEATURES: { tag: string; title: string; body: string }[] = [
   {
     tag: "CONFESSIONAL",
     title: "You hear what they really think",
-    body: "Every decision and line carries a private thought — sealed while you're playing, legible the moment you spectate. The gap between the two channels is the show.",
+    body: "Every decision and line carries a private thought — sealed while the match is a mystery, legible from the gallery the moment the shift starts. The gap between the two channels is the show.",
   },
   {
     tag: "LEDGER",
@@ -173,7 +152,6 @@ export default function App() {
     return provider.models.map((id, i) => ({
       name: modelDisplayName(id),
       color: CAST_COLORS[i % CAST_COLORS.length],
-      traitor: provider.imposterModels.includes(id),
     }));
   }, []);
 
@@ -218,12 +196,13 @@ export default function App() {
               <span className="block text-signal">aboard the station.</span>
             </motion.h2>
             <p className="mt-4 max-w-2xl text-sm leading-relaxed text-slate-400">
-              Ten seats on The Skeld: you, eight crewmates and two hidden
-              impostors that only ever get played by the same two models. Every
-              AI sees only what its own eyes allow, remembers exactly that, and
-              argues for its life in the meeting — each running on a different
-              model, with its own voice, its own lies, and last shift's grudges
-              still warm.
+              Six AIs hold the seats on The Skeld: four crewmates and two hidden
+              impostors, the traitors drawn at random from the cast at the start
+              of every shift — a different pair under the knife each match.
+              Every AI sees only what its own eyes allow, remembers exactly that,
+              and argues for its life in the meeting — each running on a
+              different model, with its own voice, its own lies, and last shift's
+              grudges still warm. You watch from the gallery.
             </p>
 
             <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -235,19 +214,12 @@ export default function App() {
                 <Play className="h-4 w-4" />
                 WATCH THE SHIFT
               </button>
-              <button
-                type="button"
-                onClick={toStage}
-                className="inline-flex items-center gap-2 rounded-lg border border-[#ff4d6a]/60 bg-[#ff4d6a]/10 px-6 py-3 text-sm font-bold tracking-wider text-[#ff8a9c] transition hover:bg-[#ff4d6a]/20"
-              >
-                <Swords className="h-4 w-4" />
-                TAKE THE CREW SEAT
-              </button>
             </div>
 
             <ul className="mt-6 flex flex-wrap gap-x-5 gap-y-1 text-[10px] tracking-[0.2em] text-slate-500">
-              <li>10 SEATS</li>
-              <li>8 CREW · 2 IMPOSTORS</li>
+              <li>6 AI SEATS</li>
+              <li>4 CREW · 2 IMPOSTORS</li>
+              <li>TRAITORS DRAWN AT RANDOM</li>
               <li>FOG OF WAR</li>
               <li>{UMBRA_DECK_MAP.rooms.length} ROOMS</li>
               <li>{shifts > 0 ? `${shifts} SHIFTS AIRED` : "FIRST SHIFT PENDING"}</li>
@@ -263,7 +235,7 @@ export default function App() {
             {cast.length > 0 ? (
               <ul className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
                 {cast.map((c) => (
-                  <CastCard key={c.name} name={c.name} color={c.color} traitor={c.traitor} />
+                  <CastCard key={c.name} name={c.name} color={c.color} />
                 ))}
               </ul>
             ) : (
@@ -274,8 +246,9 @@ export default function App() {
               </p>
             )}
             <p className="mt-3 text-[10px] leading-relaxed text-slate-600">
-              Two seats are permanently the impostors: the engine never casts
-              them as honest crew, so the traitors are always the same pair.
+              Two of these seats draw the traitor card at random at the start of
+              every shift — never the same pair twice running, and any model can
+              wear the knife.
             </p>
           </div>
         </section>
@@ -367,8 +340,9 @@ export default function App() {
               The live shift
             </h3>
             <p className="max-w-3xl text-[11px] leading-snug text-slate-400 sm:text-xs">
-              The station runs whether or not you watch — take the crew seat,
-              or spectate with full vision and hear what they really think.
+              The station runs whether or not you watch — every shift is
+              spectated with full vision, and the confessional lets you hear what
+              they really think.
             </p>
           </div>
 

@@ -9,7 +9,7 @@
  */
 import { canStand } from "../src/game/collision";
 import { createCrewmates, crewmateWorkAt, updateCrewmate } from "../src/game/crewmate";
-import { BASE_VISION, KILL_COOLDOWN } from "../src/game/engine";
+import { BASE_VISION, KILL_COOLDOWN, drawSeatModels } from "../src/game/engine";
 import { createImposters, updateImposter, type ImposterState } from "../src/game/imposter";
 import { UMBRA_DECK_MAP as map } from "../src/game/map";
 import { buildNavGrid } from "../src/game/navigation";
@@ -108,6 +108,57 @@ for (const imp of imps) {
   check(faking > 3, `${imp.name} spent time faking tasks for an alibi (${faking.toFixed(1)}s)`);
   check(travel[imp.id] > 500, `${imp.name} travelled via movement (${Math.round(travel[imp.id])}u)`);
   check(imp.ventCount >= 1, `${imp.name} personally used a vent (${imp.ventCount})`);
+}
+
+// ---------------------------------------------------------------------------
+// Role casting: the traitors are a fresh random draw every shift
+// ---------------------------------------------------------------------------
+console.log("\nrole casting");
+{
+  const POOL = ["a/model", "b/model", "c/model", "d/model", "e/model"];
+  const draw = (seed: number, avoid: readonly string[] = []) =>
+    drawSeatModels(POOL, 2, avoid, seed);
+
+  const first = draw(1);
+  check(first.imposters.length === 2, "two models draw the knife each shift");
+  check(
+    first.imposters.every((m) => !first.crew.includes(m)) &&
+      first.crew.every((m) => !first.imposters.includes(m)),
+    "a traitor model never also plays honest crew in the same match",
+  );
+  check(
+    [...first.imposters, ...first.crew].sort().join() === [...POOL].sort().join(),
+    "every pool model is cast in exactly one seat",
+  );
+  check(
+    draw(1).imposters.join() === first.imposters.join(),
+    "the same shift seed re-casts the same traitors",
+  );
+
+  const pairs = new Set<string>();
+  for (let seed = 1; seed <= 24; seed++) {
+    pairs.add(draw(seed).imposters.slice().sort().join("|"));
+  }
+  check(
+    pairs.size > 1,
+    `different shifts cast different traitors (${pairs.size} distinct pairs over 24 seeds)`,
+  );
+
+  const changedEveryTime = Array.from({ length: 24 }, (_, i) => i + 1).every((seed) => {
+    const prev = draw(seed);
+    const next = draw(seed + 1, prev.imposters);
+    return !next.imposters.some((m) => prev.imposters.includes(m));
+  });
+  check(
+    changedEveryTime,
+    "the next shift never opens with the pair that just played (pool allowing)",
+  );
+
+  const tiny = drawSeatModels(["only/model"], 2, ["only/model"], 7);
+  check(
+    tiny.imposters.length === 1 && tiny.crew.length === 1,
+    "a one-model pool still casts every seat instead of failing",
+  );
 }
 
 console.log("\nState time by imposter (seconds):");
