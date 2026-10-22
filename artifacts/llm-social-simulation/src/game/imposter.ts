@@ -51,7 +51,6 @@ export const IMPOSTER_RADIUS = 15;
 export const IMPOSTER_SPEED = 230;
 const IDLE_MIN = 0.3;
 const IDLE_MAX = 0.9;
-const VENT_TRAVEL = 1.2;
 /** How long an imposter lingers at a console pretending to work. */
 export const FAKE_DURATION = 4.5;
 
@@ -68,15 +67,6 @@ function rand(imp: Imposter): number {
 
 function ventPois(map: GameMap): PointOfInterest[] {
   return map.pointsOfInterest.filter((p) => p.kind === "vent");
-}
-
-/** Pick a random vent, preferring one other than the last used. */
-function pickVent(map: GameMap, imp: Imposter): PointOfInterest | null {
-  const vents = ventPois(map);
-  if (vents.length === 0) return null;
-  const candidates = vents.filter((v) => v.id !== imp.targetPoiId);
-  const pool = candidates.length > 0 ? candidates : vents;
-  return pool[Math.floor(rand(imp) * pool.length)];
 }
 
 function pathTo(imp: Imposter, grid: NavGrid, to: Vec2): boolean {
@@ -180,12 +170,10 @@ function updateSeekingVent(
       goIdle(imp);
       return;
     }
-    const to = pickVent(map, imp);
-    imp.ventFromId = imp.targetPoiId;
-    imp.ventToId = to?.id ?? null;
-    imp.lastVentId = imp.ventFromId;
-    imp.state = "venting";
-    imp.timer = VENT_TRAVEL;
+    // AI agents must never jump from one point on the deck to another. The
+    // player can use vents deliberately, but an autonomous movement intent
+    // should remain collision-bound and visible to the simulation.
+    goIdle(imp);
     return;
   }
 
