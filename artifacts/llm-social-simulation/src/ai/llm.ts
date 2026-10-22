@@ -136,6 +136,16 @@ function freeOnly(models: string[]): string[] {
 }
 
 function readEnv(name: string): string | undefined {
+  // Browser-entered keys let the static Vite build configure itself without a rebuild.
+  if (typeof window !== "undefined") {
+    try {
+      const stored = window.localStorage.getItem(`umbra:${name}`);
+      if (stored) return stored;
+    } catch {
+      // Storage can be disabled by privacy settings; fall through to env vars.
+    }
+  }
+
   // Vite inlines `import.meta.env`; bun/node scripts read `process.env`.
   const meta = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
   const fromMeta = meta?.[name];
@@ -191,7 +201,7 @@ export function readProviders(): ProviderConfig[] {
     if (models.length > 0) {
       providers.push({
         provider: "openrouter",
-        baseUrl: (readEnv("VITE_OPENROUTER_BASE_URL") ?? OPENROUTER_BASE_URL).replace(/\\/+$/, ""),
+        baseUrl: (readEnv("VITE_OPENROUTER_BASE_URL") ?? OPENROUTER_BASE_URL).replace(/\/+$/, ""),
         apiKey: openRouterKey,
         timeoutMs,
         models,
@@ -205,7 +215,7 @@ export function readProviders(): ProviderConfig[] {
     if (models.length > 0) {
       providers.push({
         provider: "tokenharbor",
-        baseUrl: (readEnv("VITE_TOKENHARBOR_BASE_URL") ?? TOKENHARBOR_BASE_URL).replace(/\\/+$/, ""),
+        baseUrl: (readEnv("VITE_TOKENHARBOR_BASE_URL") ?? TOKENHARBOR_BASE_URL).replace(/\/+$/, ""),
         apiKey: tokenHarborKey,
         timeoutMs,
         models,

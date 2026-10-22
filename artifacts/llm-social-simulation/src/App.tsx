@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Play, Radio, Trophy } from "lucide-react";
+import { KeyRound, Play, Radio, Trophy } from "lucide-react";
 import { modelDisplayName, readProviders } from "@/ai/llm";
 import { MAP_LEGEND, POI_LEGEND_COLORS } from "@/game/render/renderMap";
 import { UMBRA_DECK_MAP } from "@/game/map";
@@ -138,6 +138,92 @@ const FEATURES: { tag: string; title: string; body: string }[] = [
   },
 ];
 
+function readSavedKey(name: string): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.localStorage.getItem(`umbra:${name}`) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function ProviderSettings() {
+  const [openRouterKey, setOpenRouterKey] = useState(() => readSavedKey("VITE_OPENROUTER_API_KEY"));
+  const [tokenHarborKey, setTokenHarborKey] = useState(() => readSavedKey("VITE_TOKENHARBOR_API_KEY"));
+  const [expanded, setExpanded] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const save = () => {
+    try {
+      const values = [
+        ["VITE_OPENROUTER_API_KEY", openRouterKey.trim()],
+        ["VITE_TOKENHARBOR_API_KEY", tokenHarborKey.trim()],
+      ] as const;
+      for (const [name, value] of values) {
+        if (value) window.localStorage.setItem(`umbra:${name}`, value);
+        else window.localStorage.removeItem(`umbra:${name}`);
+      }
+      setSaved(true);
+      window.setTimeout(() => window.location.reload(), 450);
+    } catch {
+      setSaved(false);
+    }
+  };
+
+  return (
+    <section className="mt-5 rounded-xl border border-void-700 bg-void-950/70 p-4">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center justify-between gap-3 text-left"
+        aria-expanded={expanded}
+      >
+        <span className="flex items-center gap-2 text-[10px] font-bold tracking-[0.25em] text-slate-300">
+          <KeyRound className="h-3.5 w-3.5 text-signal" />
+          FREE MODEL KEYS
+        </span>
+        <span className="text-[10px] tracking-widest text-slate-600">{expanded ? "HIDE" : "CONFIGURE"}</span>
+      </button>
+      {expanded && (
+        <div className="mt-4 space-y-3">
+          <p className="text-[11px] leading-relaxed text-slate-500">
+            Keys stay in this browser&apos;s local storage and are only sent to the selected provider. Free model routing is enforced by the game.
+          </p>
+          <label className="block text-[10px] tracking-widest text-slate-500">
+            OPENROUTER API KEY
+            <input
+              type="password"
+              value={openRouterKey}
+              onChange={(event) => setOpenRouterKey(event.target.value)}
+              placeholder="sk-or-v1-..."
+              autoComplete="off"
+              className="mt-1 w-full rounded-lg border border-void-700 bg-void-900 px-3 py-2 text-xs text-slate-200 outline-none focus:border-signal"
+            />
+          </label>
+          <label className="block text-[10px] tracking-widest text-slate-500">
+            TOKENHARBOR API KEY
+            <input
+              type="password"
+              value={tokenHarborKey}
+              onChange={(event) => setTokenHarborKey(event.target.value)}
+              placeholder="Paste free-model key"
+              autoComplete="off"
+              className="mt-1 w-full rounded-lg border border-void-700 bg-void-900 px-3 py-2 text-xs text-slate-200 outline-none focus:border-signal"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={save}
+            className="rounded-lg bg-signal px-4 py-2 text-[10px] font-bold tracking-widest text-void-950 transition hover:bg-signal/90"
+          >
+            {saved ? "SAVED — RELOADING" : "SAVE KEYS"}
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 /**
  * The shell: a broadcast front door — title card, cast, standings, what makes
  * the shift watchable — and the stage itself, one scroll down. The game stays
@@ -252,6 +338,8 @@ export default function App() {
             </p>
           </div>
         </section>
+
+        <ProviderSettings />
 
         {/* --- standings --------------------------------------------------- */}
         <section className="mt-8">
