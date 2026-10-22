@@ -20,7 +20,11 @@ export function pointWalkable(x: number, y: number, rects: Rect[]): boolean {
   return false;
 }
 
-const SAMPLE_COUNT = 16;
+// A perimeter ring is intentionally denser than the navigation grid. The map
+// is made from axis-aligned wall runs, so a sparse ring can otherwise miss a
+// short corner contact and let an actor enter the adjacent room.
+const SAMPLE_COUNT = 48;
+const SWEEP_SAMPLE_STEP = 2;
 
 /**
  * Longest single collision-checked step. The per-axis endpoint check below is
@@ -96,6 +100,26 @@ export function nearestStandable(
  * corridors instead of hard stops. Steps longer than `MAX_STEP` are split
  * into fully-checked sub-steps first (see the constant above).
  */
+function sweptCircleWalkable(
+  from: Vec2,
+  to: Vec2,
+  radius: number,
+  rects: Rect[],
+): boolean {
+  const dist = Math.hypot(to.x - from.x, to.y - from.y);
+  const steps = Math.max(1, Math.ceil(dist / SWEEP_SAMPLE_STEP));
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    if (!circleWalkable(
+      from.x + (to.x - from.x) * t,
+      from.y + (to.y - from.y) * t,
+      radius,
+      rects,
+    )) return false;
+  }
+  return true;
+}
+
 export function moveWithCollision(
   map: GameMap,
   pos: Vec2,
@@ -117,10 +141,16 @@ export function moveWithCollision(
   let { x, y } = pos;
 
   const nx = x + dx;
-  if (dx !== 0 && circleWalkable(nx, y, radius, rects)) x = nx;
+  if (
+    dx !== 0 &&
+    sweptCircleWalkable({ x, y }, { x: nx, y }, radius, rects)
+  ) x = nx;
 
   const ny = y + dy;
-  if (dy !== 0 && circleWalkable(x, ny, radius, rects)) y = ny;
+  if (
+    dy !== 0 &&
+    sweptCircleWalkable({ x, y }, { x, y: ny }, radius, rects)
+  ) y = ny;
 
   return { x, y };
 }
