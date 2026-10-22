@@ -133,7 +133,24 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
     bg.src = SKELD_MAP_IMAGE;
     bgRef.current = bg;
 
+    let resizeFrame = 0;
+    let lastCanvasWidth = 0;
+    let lastCanvasHeight = 0;
+    let lastDpr = 0;
+
     const resize = () => {
+      // ResizeObserver fires again when the canvas height changes the wrapper's
+      // measured box. Coalesce notifications and only write layout when the
+      // backing dimensions actually changed; this prevents the browser's
+      // "ResizeObserver loop completed" warning.
+      if (resizeFrame) return;
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = 0;
+        resizeCanvas();
+      });
+    };
+
+    const resizeCanvas = () => {
       cssW = Math.max(1, Math.floor(wrap.clientWidth));
       // On phones keep the stage inside the viewport so the HUD and touch
       // controls below the fold don't push the canvas off screen. Landscape
@@ -172,11 +189,29 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
         // the fold (scrolling a little) instead of getting smaller.
         byLayout = Math.min(byWidth, Math.max(fitH, window.innerHeight * 0.75));
       }
-      cssH = Math.max(1, Math.round(byLayout));
+      const nextCssH = Math.max(1, Math.round(byLayout));
       // Mobile GPUs fill pixels fast; cap DPR hard to keep the 60 fps loop.
-      dpr = Math.min(window.devicePixelRatio || 1, touchLayout ? 1.5 : 2);
-      canvas.width = Math.round(cssW * dpr);
-      canvas.height = Math.round(cssH * dpr);
+      const nextDpr = Math.min(window.devicePixelRatio || 1, touchLayout ? 1.5 : 2);
+      const nextCanvasWidth = Math.round(cssW * nextDpr);
+      const nextCanvasHeight = Math.round(nextCssH * nextDpr);
+
+      if (
+        nextCanvasWidth === lastCanvasWidth &&
+        nextCanvasHeight === lastCanvasHeight &&
+        nextDpr === lastDpr
+      ) {
+        cssH = nextCssH;
+        dpr = nextDpr;
+        return;
+      }
+
+      cssH = nextCssH;
+      dpr = nextDpr;
+      lastCanvasWidth = nextCanvasWidth;
+      lastCanvasHeight = nextCanvasHeight;
+      lastDpr = nextDpr;
+      canvas.width = nextCanvasWidth;
+      canvas.height = nextCanvasHeight;
       canvas.style.height = `${cssH}px`;
     };
     resize();
@@ -205,6 +240,7 @@ export function GameStage({ className, history, onHistoryChange }: GameStageProp
 
     return () => {
       cancelAnimationFrame(raf);
+      if (resizeFrame) cancelAnimationFrame(resizeFrame);
       window.clearInterval(uiTimer);
       window.removeEventListener("resize", resize);
       observer.disconnect();
