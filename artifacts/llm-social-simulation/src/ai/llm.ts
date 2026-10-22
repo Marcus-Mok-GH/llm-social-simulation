@@ -1,12 +1,10 @@
 /**
  * LLM transport.
  *
- * Two OpenAI-compatible providers are supported and both speak the same
- * `POST {base}/chat/completions`:
- *
- *   - Berget AI   (`https://api.berget.ai/v1`)     — key from `BERGET_API_KEY`.
- *   - Pollinations (`https://gen.pollinations.ai/v1`) — key from
- *     `POLLINATIONS_API_KEY` / `VITE_POLLINATIONS_API_KEY`.
+ * OpenAI-compatible providers speak the same `POST {base}/chat/completions`:
+ * Berget, Pollinations, OpenRouter, and TokenHarbor. OpenRouter and TokenHarbor
+ * are restricted to their free router/model IDs so a paid model cannot be
+ * selected accidentally.
  *
  * The active provider is whatever is configured, with `VITE_LLM_PROVIDER`
  * choosing between them when both are. Every provider exposes a *pool* of
@@ -22,7 +20,7 @@ export interface ChatMessage {
   content: string;
 }
 
-export type LlmProvider = "berget" | "pollinations";
+export type LlmProvider = "berget" | "pollinations" | "openrouter" | "tokenharbor";
 
 export interface LlmConfig {
   baseUrl: string;
@@ -127,7 +125,15 @@ export function modelDisplayName(id: string): string {
 }
 
 export const BERGET_BASE_URL = "https://api.berget.ai/v1";
+export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export const TOKENHARBOR_BASE_URL = "https://tokenharbor.ai/v1";
+export const OPENROUTER_FREE_MODELS = ["openrouter/free"] as const;
+export const TOKENHARBOR_FREE_MODELS = ["openrouter/free"] as const;
 const BERGET_DEFAULT_MODEL = "mistral-small";
+
+function freeOnly(models: string[]): string[] {
+  return models.filter((model) => model === "openrouter/free" || model.endsWith(":free"));
+}
 
 function readEnv(name: string): string | undefined {
   // Vite inlines `import.meta.env`; bun/node scripts read `process.env`.
@@ -179,6 +185,34 @@ export function readProviders(): ProviderConfig[] {
     });
   }
 
+  const openRouterKey = readEnv("VITE_OPENROUTER_API_KEY") ?? readEnv("OPENROUTER_API_KEY");
+  if (openRouterKey) {
+    const models = freeOnly(modelList(readEnv("VITE_OPENROUTER_MODELS"), OPENROUTER_FREE_MODELS));
+    if (models.length > 0) {
+      providers.push({
+        provider: "openrouter",
+        baseUrl: (readEnv("VITE_OPENROUTER_BASE_URL") ?? OPENROUTER_BASE_URL).replace(/\\/+$/, ""),
+        apiKey: openRouterKey,
+        timeoutMs,
+        models,
+      });
+    }
+  }
+
+  const tokenHarborKey = readEnv("VITE_TOKENHARBOR_API_KEY") ?? readEnv("TOKENHARBOR_API_KEY");
+  if (tokenHarborKey) {
+    const models = freeOnly(modelList(readEnv("VITE_TOKENHARBOR_MODELS"), TOKENHARBOR_FREE_MODELS));
+    if (models.length > 0) {
+      providers.push({
+        provider: "tokenharbor",
+        baseUrl: (readEnv("VITE_TOKENHARBOR_BASE_URL") ?? TOKENHARBOR_BASE_URL).replace(/\\/+$/, ""),
+        apiKey: tokenHarborKey,
+        timeoutMs,
+        models,
+      });
+    }
+  }
+
   const bergetKey = readEnv("VITE_LLM_API_KEY") ?? readEnv("BERGET_API_KEY");
   if (bergetKey) {
     const models = modelList(
@@ -199,7 +233,7 @@ export function readProviders(): ProviderConfig[] {
   }
 
   const preferred = readEnv("VITE_LLM_PROVIDER")?.trim().toLowerCase();
-  if (preferred === "berget" || preferred === "pollinations") {
+  if (["berget", "pollinations", "openrouter", "tokenharbor"].includes(preferred ?? "")) {
     providers.sort(
       (a, b) =>
         (a.provider === preferred ? -1 : 0) -

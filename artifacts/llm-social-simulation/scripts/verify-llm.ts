@@ -13,6 +13,8 @@
  * Everything is paid for out of `ai.budget`, which the run prints at the end.
  *
  * Run: POLLINATIONS_API_KEY=pk_... bun scripts/verify-llm.ts
+ *   or: OPENROUTER_API_KEY=sk-or-... VITE_OPENROUTER_MODELS=openrouter/free bun scripts/verify-llm.ts
+ *   or: TOKENHARBOR_API_KEY=thk_live_... VITE_TOKENHARBOR_MODELS=some-model:free bun scripts/verify-llm.ts
  *   or: BERGET_API_KEY=sk_ber_... bun scripts/verify-llm.ts
  */
 
@@ -38,7 +40,7 @@ import { createMind, remember } from "../src/game/perception";
 const cfg = readLlmConfig();
 if (!cfg) {
   console.error(
-    "No API key found (POLLINATIONS_API_KEY, BERGET_API_KEY or the VITE_LLM_* overrides) — cannot verify the model path.",
+    "No API key found (POLLINATIONS_API_KEY, OPENROUTER_API_KEY, TOKENHARBOR_API_KEY, BERGET_API_KEY or the VITE_* overrides) — cannot verify the model path.",
   );
   process.exit(2);
 }

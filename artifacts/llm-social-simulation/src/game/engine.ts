@@ -837,6 +837,8 @@ export class GameEngine {
   private readonly AGENT_MODEL_NAMES: Record<LlmProvider, string> = {
     pollinations: "POLLINATIONS",
     berget: "BERGET",
+    openrouter: "OPENROUTER",
+    tokenharbor: "TOKEN HARBOR",
   };
 
   constructor(opts: EngineOptions = {}) {
