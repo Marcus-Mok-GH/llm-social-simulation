@@ -1905,6 +1905,27 @@ export class GameEngine {
     const known_allies =
       a.role === "imposter" ? a.mind.allies.map((k) => this.names[k] ?? k) : [];
 
+    // Local interruptions are computed from the same line-of-sight snapshot as
+    // `others`. This gives a moving agent a small, actionable read of what just
+    // happened around it without leaking positions outside its vision.
+    const nearby_events = this.actors
+      .filter((o) => o !== a && o.alive && this.visible(a, o.entity.x, o.entity.y))
+      .map((o) => {
+        const distance = Math.hypot(o.entity.x - a.entity.x, o.entity.y - a.entity.y);
+        if (distance > 260) return null;
+        const moving = o.kind === "crew"
+          ? (o.entity as Crewmate).state === "moving"
+          : (o.entity as Imposter).state === "walking";
+        if (!moving) return null;
+        const dx = o.entity.x - a.entity.x;
+        const dy = o.entity.y - a.entity.y;
+        const direction = Math.abs(dx) > Math.abs(dy)
+          ? (dx < 0 ? "left" : "right")
+          : (dy < 0 ? "above" : "below");
+        return `${o.name} is moving ${direction} nearby (${Math.round(distance)}px away); decide CHANGE COURSE or CONTINUE.`;
+      })
+      .filter((event): event is string => event !== null);
+
     // The agent's own sighting memory: where it last saw each player, from
     // moments it could actually see them. Deliberately stale — this is
     // remembered perception, never a live position.
@@ -1955,6 +1976,7 @@ export class GameEngine {
       current_time: formatClock(this.time),
       // `others` is already sight-only, so these are the names of everyone in view.
       visible_players: others.map((o) => o.name),
+      nearby_events,
       valid_moves: zoneNeighbors(this.zones, zone.id).map(ref),
       zones: this.zones.order.map((id) => ref(this.zones.zones[id])),
       tasks: a.tasks.map((t) => ({
