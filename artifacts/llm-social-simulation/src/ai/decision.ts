@@ -758,7 +758,7 @@ export async function logEntryWithModel(
         { role: "system", content: system },
         { role: "user", content: user },
       ],
-      { json: true, temperature: 0.95, maxTokens: 200, reasoningEffort: "low" },
+      { json: true, temperature: 0.95, maxTokens: 200, reasoningEffort: "high" },
     );
     if (!text) return null;
     ctx.onRaw?.(text);

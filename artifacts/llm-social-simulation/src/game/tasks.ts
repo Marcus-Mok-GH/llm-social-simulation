@@ -146,7 +146,7 @@ export function taskBarFraction(bar: TaskBar): number {
   return Math.min(1, bar.complete / bar.total);
 }
 
-export type MinigameKind = "wiring" | "calibration";
+export type MinigameKind = "wiring" | "calibration" | "ascii" | "captcha" | "draw";
 
 /**
  * Which minigame a console runs. Derived from the id rather than stored so the
@@ -156,5 +156,5 @@ export type MinigameKind = "wiring" | "calibration";
 export function minigameKind(poiId: string): MinigameKind {
   let h = 0;
   for (let i = 0; i < poiId.length; i++) h = (h * 31 + poiId.charCodeAt(i)) | 0;
-  return (h & 1) === 0 ? "wiring" : "calibration";
+  return (["wiring", "calibration", "ascii", "captcha", "draw"] as const)[Math.abs(h) % 5];
 }

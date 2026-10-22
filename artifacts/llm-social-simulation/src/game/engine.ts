@@ -122,6 +122,7 @@ import {
   PLAYER_TASKS,
   TASKS_PER_CREW,
   taskBarFraction,
+  type MinigameKind,
   type TaskAssignment,
 } from "./tasks";
 import {
@@ -562,7 +563,7 @@ export interface Snapshot {
   meetings: number;
   ejects: number;
   analyst: { key: string; name: string; color: string; top: string; score: number }[] | null;
-  activeTask: { poiId: string; label: string; room: string; kind: "wiring" | "calibration" } | null;
+  activeTask: { poiId: string; label: string; room: string; kind: MinigameKind } | null;
   /** True while the player has left the match to watch with full vision. */
   spectator: boolean;
   /** The agent thought feed, oldest first. */
