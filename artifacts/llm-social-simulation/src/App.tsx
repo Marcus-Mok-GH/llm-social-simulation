@@ -148,6 +148,8 @@ function readSavedKey(name: string): string {
 }
 
 function ProviderSettings() {
+  const [bergetKey, setBergetKey] = useState(() => readSavedKey("VITE_LLM_API_KEY"));
+  const [pollinationsKey, setPollinationsKey] = useState(() => readSavedKey("VITE_POLLINATIONS_API_KEY"));
   const [openRouterKey, setOpenRouterKey] = useState(() => readSavedKey("VITE_OPENROUTER_API_KEY"));
   const [tokenHarborKey, setTokenHarborKey] = useState(() => readSavedKey("VITE_TOKENHARBOR_API_KEY"));
   const [expanded, setExpanded] = useState(false);
@@ -156,6 +158,8 @@ function ProviderSettings() {
   const save = () => {
     try {
       const values = [
+        ["VITE_LLM_API_KEY", bergetKey.trim()],
+        ["VITE_POLLINATIONS_API_KEY", pollinationsKey.trim()],
         ["VITE_OPENROUTER_API_KEY", openRouterKey.trim()],
         ["VITE_TOKENHARBOR_API_KEY", tokenHarborKey.trim()],
       ] as const;
@@ -189,6 +193,28 @@ function ProviderSettings() {
           <p className="text-[11px] leading-relaxed text-slate-500">
             Keys stay in this browser&apos;s local storage and are only sent to the selected provider. Free model routing is enforced by the game.
           </p>
+          <label className="block text-[10px] tracking-widest text-slate-500">
+            BERGET API KEY
+            <input
+              type="password"
+              value={bergetKey}
+              onChange={(event) => setBergetKey(event.target.value)}
+              placeholder="Paste Berget key"
+              autoComplete="off"
+              className="mt-1 w-full rounded-lg border border-void-700 bg-void-900 px-3 py-2 text-xs text-slate-200 outline-none focus:border-signal"
+            />
+          </label>
+          <label className="block text-[10px] tracking-widest text-slate-500">
+            POLLINATIONS API KEY
+            <input
+              type="password"
+              value={pollinationsKey}
+              onChange={(event) => setPollinationsKey(event.target.value)}
+              placeholder="Paste Pollinations key"
+              autoComplete="off"
+              className="mt-1 w-full rounded-lg border border-void-700 bg-void-900 px-3 py-2 text-xs text-slate-200 outline-none focus:border-signal"
+            />
+          </label>
           <label className="block text-[10px] tracking-widest text-slate-500">
             OPENROUTER API KEY
             <input
