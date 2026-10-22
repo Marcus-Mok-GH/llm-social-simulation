@@ -21,7 +21,7 @@ line of sight allows, **remember** it, **reason** about who to trust, and
 | **Sabotage & vents — removed** | No agent can trigger a sabotage or travel by vent any more; the traitor's toolkit is the kill, the lies, and the crowd. (The referee machinery stays in the engine only so the headless checks can still drive it directly.) |
 | **Meetings** | Report a body, or press the emergency beacon — AI crewmates walk to the Cafeteria beacon and call one themselves when they have a real lead → discussion → voting → tally → ejection |
 | **Belief model** | Per-agent complete match log (every event, sighting, decision and meeting, from start to finish) + suspicion vector with decay, body-room inference |
-| **LLM decision loop** | A configurable OpenAI-compatible provider (Pollinations or Berget) returns validated JSON intents (`MOVE`/`INTERACT`) and meeting lines; each AI agent runs a **different** model from a cheap-model pool, with heuristic fallback on any failure |
+| **LLM decision loop** | A configurable OpenAI-compatible provider (Pollinations, Berget, OpenRouter, or TokenHarbor) returns validated JSON intents (`MOVE`/`INTERACT`) and meeting lines; OpenRouter and TokenHarbor are restricted to free models, with heuristic fallback on any failure |
 | **Deception & identification** | Every traitor is handed a persona (wire-puller / provocateur / confidant / ghost) and lies in meetings with structured claims — `accuse`, `vouch`, `alibi`. Every listener weighs a claim against its own memory: an unverifiable smear only shades suspicion, but a claim its own eyes contradict brands the speaker a liar (`caught`) — the crew's way of identifying imposters |
 | **Autonomous station host** | The match runs server-side in the preview process: it starts on its own, keeps ticking with the tab closed (every shift is spectated, so the six AIs play the whole match), folds every shift into the cross-match ledger and chains the next one — the browser is a viewer that can close and rejoin |
 | **Persistence** | Finished matches, transcripts and every agent's suspicion snapshot saved to `localStorage` in local mode, and to the shared server-side history when the shift runs on the host |
@@ -115,10 +115,7 @@ fresh host process.
 ## Model configuration
 
 The game talks to OpenAI-compatible chat-completions endpoints directly from the
-browser. Two providers are supported and both are CORS-enabled. **Pollinations
-is preferred when its key is present**, and every AI agent is assigned its own
-model from the provider's pool — in the 4-crew + 2-imposter match the crew and
-the traitors never share a model. **The traitors are drawn at random from the
+browser. Four providers are supported. **Pollinations is preferred when its key is present**, followed by OpenRouter and TokenHarbor, and every AI agent is assigned its own model from the provider's pool when available. OpenRouter and TokenHarbor accept only `openrouter/free` or model IDs ending in `:free`, preventing paid models from being selected accidentally. **The traitors are drawn at random from the
 pool at the start of every shift**: any model can be the imposter, a traitor
 model never also plays honest crew *within* a match, and the draw avoids the
 pair that played them last shift — so no two shifts in a row open with the same
@@ -132,7 +129,13 @@ traitors.
 | `BERGET_API_KEY` / `VITE_LLM_API_KEY` | — | Berget key. |
 | `BERGET_BASE_URL` / `VITE_LLM_BASE_URL` | `https://api.berget.ai/v1` | Berget endpoint. |
 | `BERGET_MODEL` / `VITE_LLM_MODEL` | `mistral-small` | Berget model (Berget has no model pool). |
-| `VITE_LLM_PROVIDER` | auto | Pin `pollinations` or `berget` when both keys are set. |
+| `OPENROUTER_API_KEY` / `VITE_OPENROUTER_API_KEY` | — | OpenRouter key. |
+| `VITE_OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter endpoint. |
+| `VITE_OPENROUTER_MODELS` | `openrouter/free` | Comma-separated free-only model pool; use `:free` IDs or `openrouter/free`. |
+| `TOKENHARBOR_API_KEY` / `VITE_TOKENHARBOR_API_KEY` | — | TokenHarbor key (`thk_live_...`). |
+| `VITE_TOKENHARBOR_BASE_URL` | `https://tokenharbor.ai/v1` | TokenHarbor endpoint. |
+| `VITE_TOKENHARBOR_MODELS` | `openrouter/free` | Comma-separated free-only model pool; use TokenHarbor `:free` IDs or `openrouter/free`. |
+| `VITE_LLM_PROVIDER` | auto | Pin `pollinations`, `openrouter`, `tokenharbor`, or `berget` when multiple keys are set. |
 | `VITE_LLM_TIMEOUT_MS` | `15000` | Per-request timeout. |
 
 ### Why these Pollinations models
