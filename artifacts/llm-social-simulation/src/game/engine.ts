@@ -14,8 +14,6 @@
  */
 
 import {
-  fallbackStatement,
-  heuristicIntent,
   intentWithModel,
   logEntryWithModel,
   statementWithModel,
@@ -51,7 +49,6 @@ import {
 import {
   confessionalFallback,
   ghostStatement,
-  heuristicStatement,
   type NameIndex,
   type Statement,
 } from "./dialogue";
@@ -75,7 +72,6 @@ import {
   LOG_ENTRY_MAX,
   LOG_MODEL_CALLS_MAX,
   logBriefFor,
-  templateLogEntry,
   type StationLogEntry,
 } from "./creative";
 import { type MatchEvent } from "./events";
@@ -2149,21 +2145,16 @@ export class GameEngine {
             if (this.phase === "playing" && a.alive && seq === a.decisionSeq) {
               this.applyIntent(a, intent, "model");
             }
-          } else {
-            this.llmFallbacks++;
-            if (this.phase === "playing" && a.alive) {
-              this.applyIntent(a, heuristicIntent(view, () => this.rng.next()), "heuristic");
-            }
           }
         })
         .catch(() => {
           a.pendingDecision = false;
-          this.llmFallbacks++;
         });
       return;
     }
 
-    this.applyIntent(a, heuristicIntent(view, () => this.rng.next()), "heuristic");
+    // AI-controlled actors only act on validated model JSON. Without a model
+    // response, leave the actor in place rather than inventing an action.
   }
 
   /**
@@ -2417,10 +2408,7 @@ export class GameEngine {
       }
     };
 
-    if (!useModel) {
-      publish(templateLogEntry(brief, a.name, `${poi.id}:${this.stationLog.length}`), "template");
-      return;
-    }
+    if (!useModel) return;
 
     this.logModelCalls++;
     void logEntryWithModel(this.contextFor(a), {
@@ -2435,14 +2423,10 @@ export class GameEngine {
         if (text) {
           this.llmCalls++;
           publish(text, "model");
-        } else {
-          this.llmFallbacks++;
-          publish(templateLogEntry(brief, a.name, `${poi.id}:${this.stationLog.length}`), "template");
         }
       })
       .catch(() => {
-        this.llmFallbacks++;
-        publish(templateLogEntry(brief, a.name, `${poi.id}:${this.stationLog.length}`), "template");
+        // Station logs are model-only; a failed generation produces no entry.
       });
   }
 
@@ -2923,19 +2907,15 @@ export class GameEngine {
           if (stmt) {
             this.llmCalls++;
             post(stmt, "model");
-          } else {
-            this.llmFallbacks++;
-            post(fallbackStatement(this.map, a.mind, { key: a.key, name: a.name }, this.names, input), "heuristic");
           }
         })
         .catch(() => {
-          this.llmFallbacks++;
-          post(fallbackStatement(this.map, a.mind, { key: a.key, name: a.name }, this.names, input), "heuristic");
+          // A meeting turn is model-only; do not manufacture dialogue.
         });
       return;
     }
 
-    post(heuristicStatement(this.map, a.mind, { key: a.key, name: a.name }, this.names, input), "heuristic");
+    // Without a configured model, this AI does not speak.
   }
 
   /**
