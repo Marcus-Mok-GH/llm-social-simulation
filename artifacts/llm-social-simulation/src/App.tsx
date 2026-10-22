@@ -148,25 +148,15 @@ function readSavedKey(name: string): string {
 }
 
 function ProviderSettings() {
-  const [bergetKey, setBergetKey] = useState(() => readSavedKey("VITE_LLM_API_KEY"));
   const [pollinationsKey, setPollinationsKey] = useState(() => readSavedKey("VITE_POLLINATIONS_API_KEY"));
-  const [openRouterKey, setOpenRouterKey] = useState(() => readSavedKey("VITE_OPENROUTER_API_KEY"));
-  const [tokenHarborKey, setTokenHarborKey] = useState(() => readSavedKey("VITE_TOKENHARBOR_API_KEY"));
   const [expanded, setExpanded] = useState(false);
   const [saved, setSaved] = useState(false);
 
   const save = () => {
     try {
-      const values = [
-        ["VITE_LLM_API_KEY", bergetKey.trim()],
-        ["VITE_POLLINATIONS_API_KEY", pollinationsKey.trim()],
-        ["VITE_OPENROUTER_API_KEY", openRouterKey.trim()],
-        ["VITE_TOKENHARBOR_API_KEY", tokenHarborKey.trim()],
-      ] as const;
-      for (const [name, value] of values) {
-        if (value) window.localStorage.setItem(`umbra:${name}`, value);
-        else window.localStorage.removeItem(`umbra:${name}`);
-      }
+      const value = pollinationsKey.trim();
+      if (value) window.localStorage.setItem("umbra:VITE_POLLINATIONS_API_KEY", value);
+      else window.localStorage.removeItem("umbra:VITE_POLLINATIONS_API_KEY");
       setSaved(true);
       window.setTimeout(() => window.location.reload(), 450);
     } catch {
@@ -184,26 +174,15 @@ function ProviderSettings() {
       >
         <span className="flex items-center gap-2 text-[10px] font-bold tracking-[0.25em] text-slate-300">
           <KeyRound className="h-3.5 w-3.5 text-signal" />
-          FREE MODEL KEYS
+          POLLINATIONS KEY
         </span>
         <span className="text-[10px] tracking-widest text-slate-600">{expanded ? "HIDE" : "CONFIGURE"}</span>
       </button>
       {expanded && (
         <div className="mt-4 space-y-3">
           <p className="text-[11px] leading-relaxed text-slate-500">
-            Keys stay in this browser&apos;s local storage and are only sent to the selected provider. Free model routing is enforced by the game.
+            This key stays in this browser&apos;s local storage and is only sent to Pollinations. The game uses Pollinations for every AI seat.
           </p>
-          <label className="block text-[10px] tracking-widest text-slate-500">
-            BERGET API KEY
-            <input
-              type="password"
-              value={bergetKey}
-              onChange={(event) => setBergetKey(event.target.value)}
-              placeholder="Paste Berget key"
-              autoComplete="off"
-              className="mt-1 w-full rounded-lg border border-void-700 bg-void-900 px-3 py-2 text-xs text-slate-200 outline-none focus:border-signal"
-            />
-          </label>
           <label className="block text-[10px] tracking-widest text-slate-500">
             POLLINATIONS API KEY
             <input
@@ -215,34 +194,12 @@ function ProviderSettings() {
               className="mt-1 w-full rounded-lg border border-void-700 bg-void-900 px-3 py-2 text-xs text-slate-200 outline-none focus:border-signal"
             />
           </label>
-          <label className="block text-[10px] tracking-widest text-slate-500">
-            OPENROUTER API KEY
-            <input
-              type="password"
-              value={openRouterKey}
-              onChange={(event) => setOpenRouterKey(event.target.value)}
-              placeholder="sk-or-v1-..."
-              autoComplete="off"
-              className="mt-1 w-full rounded-lg border border-void-700 bg-void-900 px-3 py-2 text-xs text-slate-200 outline-none focus:border-signal"
-            />
-          </label>
-          <label className="block text-[10px] tracking-widest text-slate-500">
-            TOKENHARBOR API KEY
-            <input
-              type="password"
-              value={tokenHarborKey}
-              onChange={(event) => setTokenHarborKey(event.target.value)}
-              placeholder="Paste free-model key"
-              autoComplete="off"
-              className="mt-1 w-full rounded-lg border border-void-700 bg-void-900 px-3 py-2 text-xs text-slate-200 outline-none focus:border-signal"
-            />
-          </label>
           <button
             type="button"
             onClick={save}
             className="rounded-lg bg-signal px-4 py-2 text-[10px] font-bold tracking-widest text-void-950 transition hover:bg-signal/90"
           >
-            {saved ? "SAVED — RELOADING" : "SAVE KEYS"}
+            {saved ? "SAVED — RELOADING" : "SAVE KEY"}
           </button>
         </div>
       )}
