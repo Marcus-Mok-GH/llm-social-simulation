@@ -112,6 +112,12 @@ export interface WorldView {
   current_time: string;
   /** Names of the agents the observer can currently see. */
   visible_players: string[];
+  /**
+   * Live, local interruptions noticed while moving. These are deliberately
+   * limited to nearby actors in line of sight so an agent can decide whether
+   * to react or continue its current route without receiving omniscient data.
+   */
+  nearby_events: string[];
   /** Zones directly connected to the current zone. */
   valid_moves: ZoneRef[];
   /** Every node in the station graph, so multi-hop targets resolve. */
@@ -248,6 +254,10 @@ function systemPrompt(view: WorldView): string {
     "The Cafeteria emergency beacon (object id \"emergency\") calls an emergency meeting:",
     "walk there, then INTERACT with it. Use it when you have a real suspicion worth putting",
     "to the room — the crew then gathers to discuss and vote.",
+    "While moving, nearby_events reports local actors changing position around you.",
+    "For each nearby event, decide whether to CHANGE COURSE or CONTINUE your current path.",
+    "If it is harmless movement, continue; if it is a body, threat, ally, or suspicious approach,",
+    "you may move toward a safer zone, regroup, or investigate. Never assume an event beyond sight.",
     "You keep a memory between turns: your current goal, why you chose your last action, and",
     "a recap of every meeting. Nothing is forgotten: your_history holds every event you have",
     "observed this match, your_decisions holds every decision you have made, and your_goal /",
@@ -290,6 +300,7 @@ function summarise(view: WorldView): Record<string, unknown> {
     current_location: view.current_location,
     current_time: view.current_time,
     visible_players: view.visible_players,
+    nearby_events: view.nearby_events,
     valid_moves: view.valid_moves.map((z) => z.name),
     zones: view.zones.map((z) => z.name),
     you: view.self,

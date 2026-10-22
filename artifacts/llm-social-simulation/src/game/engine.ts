@@ -14,8 +14,6 @@
  */
 
 import {
-  fallbackStatement,
-  heuristicIntent,
   intentWithModel,
   logEntryWithModel,
   statementWithModel,
@@ -51,7 +49,6 @@ import {
 import {
   confessionalFallback,
   ghostStatement,
-  heuristicStatement,
   type NameIndex,
   type Statement,
 } from "./dialogue";
@@ -75,7 +72,6 @@ import {
   LOG_ENTRY_MAX,
   LOG_MODEL_CALLS_MAX,
   logBriefFor,
-  templateLogEntry,
   type StationLogEntry,
 } from "./creative";
 import { type MatchEvent } from "./events";
@@ -1905,6 +1901,27 @@ export class GameEngine {
     const known_allies =
       a.role === "imposter" ? a.mind.allies.map((k) => this.names[k] ?? k) : [];
 
+    // Local interruptions are computed from the same line-of-sight snapshot as
+    // `others`. This gives a moving agent a small, actionable read of what just
+    // happened around it without leaking positions outside its vision.
+    const nearby_events = this.actors
+      .filter((o) => o !== a && o.alive && this.visible(a, o.entity.x, o.entity.y))
+      .map((o) => {
+        const distance = Math.hypot(o.entity.x - a.entity.x, o.entity.y - a.entity.y);
+        if (distance > 260) return null;
+        const moving = o.kind === "crew"
+          ? (o.entity as Crewmate).state === "moving"
+          : (o.entity as Imposter).state === "walking";
+        if (!moving) return null;
+        const dx = o.entity.x - a.entity.x;
+        const dy = o.entity.y - a.entity.y;
+        const direction = Math.abs(dx) > Math.abs(dy)
+          ? (dx < 0 ? "left" : "right")
+          : (dy < 0 ? "above" : "below");
+        return `${o.name} is moving ${direction} nearby (${Math.round(distance)}px away); decide CHANGE COURSE or CONTINUE.`;
+      })
+      .filter((event): event is string => event !== null);
+
     // The agent's own sighting memory: where it last saw each player, from
     // moments it could actually see them. Deliberately stale — this is
     // remembered perception, never a live position.
@@ -1955,6 +1972,7 @@ export class GameEngine {
       current_time: formatClock(this.time),
       // `others` is already sight-only, so these are the names of everyone in view.
       visible_players: others.map((o) => o.name),
+      nearby_events,
       valid_moves: zoneNeighbors(this.zones, zone.id).map(ref),
       zones: this.zones.order.map((id) => ref(this.zones.zones[id])),
       tasks: a.tasks.map((t) => ({
@@ -2127,21 +2145,16 @@ export class GameEngine {
             if (this.phase === "playing" && a.alive && seq === a.decisionSeq) {
               this.applyIntent(a, intent, "model");
             }
-          } else {
-            this.llmFallbacks++;
-            if (this.phase === "playing" && a.alive) {
-              this.applyIntent(a, heuristicIntent(view, () => this.rng.next()), "heuristic");
-            }
           }
         })
         .catch(() => {
           a.pendingDecision = false;
-          this.llmFallbacks++;
         });
       return;
     }
 
-    this.applyIntent(a, heuristicIntent(view, () => this.rng.next()), "heuristic");
+    // AI-controlled actors only act on validated model JSON. Without a model
+    // response, leave the actor in place rather than inventing an action.
   }
 
   /**
@@ -2395,10 +2408,7 @@ export class GameEngine {
       }
     };
 
-    if (!useModel) {
-      publish(templateLogEntry(brief, a.name, `${poi.id}:${this.stationLog.length}`), "template");
-      return;
-    }
+    if (!useModel) return;
 
     this.logModelCalls++;
     void logEntryWithModel(this.contextFor(a), {
@@ -2413,14 +2423,10 @@ export class GameEngine {
         if (text) {
           this.llmCalls++;
           publish(text, "model");
-        } else {
-          this.llmFallbacks++;
-          publish(templateLogEntry(brief, a.name, `${poi.id}:${this.stationLog.length}`), "template");
         }
       })
       .catch(() => {
-        this.llmFallbacks++;
-        publish(templateLogEntry(brief, a.name, `${poi.id}:${this.stationLog.length}`), "template");
+        // Station logs are model-only; a failed generation produces no entry.
       });
   }
 
@@ -2901,19 +2907,15 @@ export class GameEngine {
           if (stmt) {
             this.llmCalls++;
             post(stmt, "model");
-          } else {
-            this.llmFallbacks++;
-            post(fallbackStatement(this.map, a.mind, { key: a.key, name: a.name }, this.names, input), "heuristic");
           }
         })
         .catch(() => {
-          this.llmFallbacks++;
-          post(fallbackStatement(this.map, a.mind, { key: a.key, name: a.name }, this.names, input), "heuristic");
+          // A meeting turn is model-only; do not manufacture dialogue.
         });
       return;
     }
 
-    post(heuristicStatement(this.map, a.mind, { key: a.key, name: a.name }, this.names, input), "heuristic");
+    // Without a configured model, this AI does not speak.
   }
 
   /**
