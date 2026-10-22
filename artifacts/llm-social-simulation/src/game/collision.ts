@@ -23,8 +23,13 @@ export function pointWalkable(x: number, y: number, rects: Rect[]): boolean {
 // A perimeter ring is intentionally denser than the navigation grid. The map
 // is made from axis-aligned wall runs, so a sparse ring can otherwise miss a
 // short corner contact and let an actor enter the adjacent room.
-const SAMPLE_COUNT = 48;
-const SWEEP_SAMPLE_STEP = 2;
+// The map is represented as a union of axis-aligned floor rectangles. A
+// coarse perimeter ring can skip a thin wall corner when an actor approaches
+// it diagonally, so use a near-pixel ring for every collision query. This is
+// intentionally conservative: a position is valid only when the entire actor
+// perimeter is still on the floor union.
+const SAMPLE_COUNT = 360;
+const SWEEP_SAMPLE_STEP = 1;
 
 /**
  * Longest single collision-checked step. The per-axis endpoint check below is

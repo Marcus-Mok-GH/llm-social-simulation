@@ -197,7 +197,9 @@ function segmentClear(grid: NavGrid, a: Vec2, b: Vec2): boolean {
     const y = a.y + (b.y - a.y) * t;
     if (!circleWalkable(x, y, grid.radius, grid.rects)) return false;
   }
-  return true;
+  // Check the destination too. Omitting it lets a simplified path end inside
+  // a one-cell corner pocket when the final waypoint is exactly on a wall edge.
+  return circleWalkable(b.x, b.y, grid.radius, grid.rects);
 }
 
 /** Drop waypoints that can be skipped with a clear straight run. */
