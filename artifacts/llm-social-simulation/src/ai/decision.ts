@@ -1,11 +1,8 @@
 /**
  * The AI decision layer.
  *
- * Three questions, two interchangeable implementations of each:
- *
- *   1. What should I do right now?      -> `intentWithModel` / `heuristicIntent`
- *   2. What should I say in the meeting? -> `statementWithModel` / `fallbackStatement`
- *   3. Who do I vote for?                -> always the belief model (see engine.ts)
+ * Every AI action and meeting line comes from the configured model's JSON.
+ * Voting is always handled by the belief model (see engine.ts).
  *
  * Movement is *node based* (PLAN.md): the engine serializes the agent's current
  * zone, the zones it can step into, the interactables it is standing among, who
@@ -29,7 +26,7 @@
 
 import { complete, extractJson, type ChatMessage, type LlmConfig } from "./llm";
 import { type Mind } from "../game/perception";
-import { heuristicStatement, memoryDigest, type NameIndex, type Statement } from "../game/dialogue";
+import { memoryDigest, type NameIndex, type Statement } from "../game/dialogue";
 import { buildLogPrompt, parseLogEntry, type LogBrief } from "../game/creative";
 import type { GameMap, RoomId } from "../game/map";
 import { roomById } from "../game/map";
@@ -361,9 +358,6 @@ export function validateIntent(raw: unknown, view: WorldView): Intent | null {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Heuristic fallback (used when there is no key, or the model fails)
-// ---------------------------------------------------------------------------
 
 /**
  * Choose a destination zone using the same node data the model sees. Returns a
@@ -766,23 +760,6 @@ export async function logEntryWithModel(
   } finally {
     if (release) await release;
   }
-}
-
-/** Single fallback path used by the engine when the model is unavailable. */
-export function fallbackStatement(
-  map: GameMap,
-  mind: Mind,
-  speaker: { key: string; name: string },
-  names: NameIndex,
-  input: StatementInput,
-): Statement {
-  return heuristicStatement(map, mind, speaker, names, {
-    others: input.others,
-    playerLine: input.playerLine,
-    turn: input.turn,
-    alibiRoomId: input.alibiRoomId ?? null,
-    style: input.style ?? null,
-  });
 }
 
 export function roomNameOf(map: GameMap, roomId: RoomId): string {

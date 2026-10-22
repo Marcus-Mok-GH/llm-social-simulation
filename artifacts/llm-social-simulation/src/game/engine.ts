@@ -47,7 +47,6 @@ import {
   type Crewmate,
 } from "./crewmate";
 import {
-  confessionalFallback,
   ghostStatement,
   type NameIndex,
   type Statement,
@@ -2304,7 +2303,7 @@ export class GameEngine {
     this.confess(
       a,
       action,
-      reasoning?.trim() || confessionalFallback(a.mind, this.names, a.deceptionStyle),
+      reasoning?.trim() || "",
       source,
     );
   }
@@ -2891,7 +2890,7 @@ export class GameEngine {
       this.confess(
         a,
         `Said: ${stmt.line.slice(0, 140)}${stmt.line.length > 140 ? "..." : ""}`,
-        stmt.thinking?.trim() || confessionalFallback(a.mind, this.names, a.deceptionStyle),
+        stmt.thinking?.trim() || "",
         source,
       );
 
@@ -3094,7 +3093,7 @@ export class GameEngine {
 
     this.system(
       ejected.role === "imposter"
-        ? `${ejected.name} was ejected — they were an imposter.`
+        ? `${ejected.name} was ejected �� they were an imposter.`
         : `${ejected.name} was ejected — they were innocent.`,
     );
   }
