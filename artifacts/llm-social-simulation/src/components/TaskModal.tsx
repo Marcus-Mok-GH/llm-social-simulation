@@ -193,6 +193,85 @@ function Calibration({ onDone }: { onDone: () => void }) {
   );
 }
 
+function AsciiIdentify({ seed, onDone }: { seed: number; onDone: () => void }) {
+  const glyphs = ["/\\", "|_|", "[_]", "<>", "#", "{}"];
+  const target = glyphs[Math.abs(seed) % glyphs.length];
+  const options = shuffle(glyphs, seed + 17);
+  const [attempts, setAttempts] = useState(0);
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border border-void-700 bg-void-950 p-5 text-center">
+        <p className="mb-2 text-[10px] tracking-widest text-slate-500">IDENTIFY THE SIGNAL</p>
+        <pre className="font-mono text-3xl font-bold text-signal">{target}</pre>
+      </div>
+      <p className="text-center text-xs text-slate-500">Which ASCII character sequence matches the signal?</p>
+      <div className="grid grid-cols-2 gap-2">
+        {options.map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => (option === target ? onDone() : setAttempts((value) => value + 1))}
+            className="rounded-lg border border-void-700 bg-void-950 px-3 py-3 font-mono text-lg text-slate-200 transition hover:border-signal hover:text-signal"
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+      <p className="text-center text-[10px] tracking-widest text-slate-600">DECODE ATTEMPTS: {attempts}</p>
+    </div>
+  );
+}
+
+function Captcha({ seed, onDone }: { seed: number; onDone: () => void }) {
+  const prompts = ["select every square with a signal", "click the squares in order", "verify the marked console"];
+  const prompt = prompts[Math.abs(seed) % prompts.length];
+  const correct = new Set([0, 3, 5]);
+  const [selected, setSelected] = useState<number[]>([]);
+  const submit = () => {
+    if (selected.length === correct.size && selected.every((index) => correct.has(index))) onDone();
+  };
+
+  return (
+    <div className="space-y-4">
+      <p className="text-center text-xs uppercase tracking-widest text-slate-500">CAPTCHA: {prompt}</p>
+      <div className="grid grid-cols-3 gap-2 rounded-lg border border-void-700 bg-void-950 p-2">
+        {Array.from({ length: 6 }, (_, index) => (
+          <button
+            key={index}
+            type="button"
+            aria-pressed={selected.includes(index)}
+            onClick={() => setSelected((current) => current.includes(index) ? current.filter((value) => value !== index) : [...current, index])}
+            className={cn("aspect-square rounded-md border text-lg transition", selected.includes(index) ? "border-signal bg-signal/20 text-signal" : "border-void-700 bg-void-900 text-slate-600 hover:border-slate-400")}
+          >
+            {index % 2 === 0 ? "·" : "×"}
+          </button>
+        ))}
+      </div>
+      <button type="button" onClick={submit} className="w-full rounded-lg bg-signal px-4 py-2.5 text-sm font-semibold text-void-950 transition hover:bg-signal/90">VERIFY SELECTION</button>
+    </div>
+  );
+}
+
+function DrawAscii({ seed, onDone }: { seed: number; onDone: () => void }) {
+  const target = ["X", "+", "O"][Math.abs(seed) % 3];
+  const [cells, setCells] = useState<number[]>([]);
+  const required = target === "X" ? [0, 4, 8, 2, 6] : target === "+" ? [1, 4, 3, 5, 7] : [1, 2, 5, 8, 7, 6, 3, 0];
+  const draw = () => { if (required.every((cell) => cells.includes(cell))) onDone(); };
+
+  return (
+    <div className="space-y-4">
+      <p className="text-center text-xs uppercase tracking-widest text-slate-500">DRAW THE ASCII GLYPH: <span className="font-mono text-signal">{target}</span></p>
+      <div className="mx-auto grid max-w-[180px] grid-cols-3 gap-1 rounded-lg border border-void-700 bg-void-950 p-2">
+        {Array.from({ length: 9 }, (_, index) => (
+          <button key={index} type="button" aria-label={`draw cell ${index + 1}`} onClick={() => setCells((current) => current.includes(index) ? current : [...current, index])} className={cn("aspect-square rounded border transition", cells.includes(index) ? "border-signal bg-signal text-void-950" : "border-void-700 bg-void-900 hover:border-slate-400")} />
+        ))}
+      </div>
+      <button type="button" onClick={draw} className="w-full rounded-lg bg-signal px-4 py-2.5 text-sm font-semibold text-void-950 transition hover:bg-signal/90">SUBMIT GLYPH</button>
+    </div>
+  );
+}
+
 export function TaskModal({ label, room, kind, onComplete, onFail }: TaskModalProps) {
   const [seconds, setSeconds] = useState(ROUND_SECONDS);
 
@@ -227,8 +306,14 @@ export function TaskModal({ label, room, kind, onComplete, onFail }: TaskModalPr
 
         {kind === "wiring" ? (
           <Wiring seed={seed} onDone={onComplete} />
-        ) : (
+        ) : kind === "calibration" ? (
           <Calibration onDone={onComplete} />
+        ) : kind === "ascii" ? (
+          <AsciiIdentify seed={seed} onDone={onComplete} />
+        ) : kind === "captcha" ? (
+          <Captcha seed={seed} onDone={onComplete} />
+        ) : (
+          <DrawAscii seed={seed} onDone={onComplete} />
         )}
 
         <button
