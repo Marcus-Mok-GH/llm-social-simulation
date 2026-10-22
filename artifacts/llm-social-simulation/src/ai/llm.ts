@@ -128,11 +128,17 @@ export const BERGET_BASE_URL = "https://api.berget.ai/v1";
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export const TOKENHARBOR_BASE_URL = "https://tokenharbor.ai/v1";
 export const OPENROUTER_FREE_MODELS = ["openrouter/free"] as const;
-export const TOKENHARBOR_FREE_MODELS = ["openrouter/free"] as const;
+// TokenHarbor has its own free catalog. `openrouter/free` is an OpenRouter
+// router ID and is not a valid TokenHarbor model ID.
+export const TOKENHARBOR_FREE_MODELS = ["deepseek-v4.1-flash:free"] as const;
 const BERGET_DEFAULT_MODEL = "mistral-small";
 
-function freeOnly(models: string[]): string[] {
-  return models.filter((model) => model === "openrouter/free" || model.endsWith(":free"));
+function freeOnly(models: string[], provider: "openrouter" | "tokenharbor"): string[] {
+  return models.filter((model) =>
+    provider === "openrouter"
+      ? model === "openrouter/free" || model.endsWith(":free")
+      : model.endsWith(":free"),
+  );
 }
 
 function readEnv(name: string): string | undefined {
@@ -197,7 +203,7 @@ export function readProviders(): ProviderConfig[] {
 
   const openRouterKey = readEnv("VITE_OPENROUTER_API_KEY") ?? readEnv("OPENROUTER_API_KEY");
   if (openRouterKey) {
-    const models = freeOnly(modelList(readEnv("VITE_OPENROUTER_MODELS"), OPENROUTER_FREE_MODELS));
+    const models = freeOnly(modelList(readEnv("VITE_OPENROUTER_MODELS"), OPENROUTER_FREE_MODELS), "openrouter");
     if (models.length > 0) {
       providers.push({
         provider: "openrouter",
@@ -211,7 +217,7 @@ export function readProviders(): ProviderConfig[] {
 
   const tokenHarborKey = readEnv("VITE_TOKENHARBOR_API_KEY") ?? readEnv("TOKENHARBOR_API_KEY");
   if (tokenHarborKey) {
-    const models = freeOnly(modelList(readEnv("VITE_TOKENHARBOR_MODELS"), TOKENHARBOR_FREE_MODELS));
+    const models = freeOnly(modelList(readEnv("VITE_TOKENHARBOR_MODELS"), TOKENHARBOR_FREE_MODELS), "tokenharbor");
     if (models.length > 0) {
       providers.push({
         provider: "tokenharbor",
